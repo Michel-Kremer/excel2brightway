@@ -3,12 +3,17 @@
 Prueft LCI-/ecoinvent-Excel-Daten im nativen Brightway2-Excel-Format
 (`bw2io.ExcelImporter`) auf Korrektheit - Flow-Aufloesung (intern /
 `flow_registry.yaml` / ecoinvent, read-only) und Excel-Format - und schreibt
-sie bei vollstaendiger Aufloesung nach Brightway, inklusive Parametern und
-Formeln als echte, im Activity Browser editierbare `bw2data`-Parameter.
+sie bei vollstaendiger Aufloesung in eine Brightway database, inklusive der definierten Parametern und
+Formeln.
 
 ## Installation
 
+In der Ziel-Umgebung (Conda oder venv), die auch die passende
+`bw2data`-Version enthaelt:
+
 ```
+conda activate <env-name>
+cd <pfad-zum-projekt>
 pip install -e .
 ```
 
@@ -23,6 +28,11 @@ pip install -r requirements-lock.txt
 Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 3.6.x) - eine neuere
 Major-Version loest beim ersten Projektzugriff eine automatische,
 irreversible Migration am geteilten Brightway-Projektordner aus.
+
+`pip install -e .` verankert den Paketpfad als absoluten Pfad in der
+Umgebung. Wird `<pfad-zum-projekt>` spaeter verschoben oder umbenannt, bricht
+die Installation und muss von `<pfad-zum-projekt>` aus erneut mit
+`pip install -e .` durchgefuehrt werden.
 
 ## Workspace
 
@@ -44,6 +54,7 @@ variable `EX2BW_WORKSPACE` > aktuelles Arbeitsverzeichnis.
 ## Nutzung
 
 ```
+conda activate <env-name>
 cd <workspace>
 ex2bw-check              # Stufe 1: Testen & Abgleichen -> output_excel2brightway/resolved/*.yaml
 ex2bw-load                # Stufe 2: resolved/*.yaml -> Brightway (fragt vor dem Schreiben nach)
@@ -53,6 +64,12 @@ ex2bw-tidy-registry        # flow_registry.yaml aufraeumen (Dedupe + unit-Backfi
 
 Jeder Befehl akzeptiert `--workspace PATH`, um nicht aus dem Workspace heraus
 aufgerufen zu werden.
+
+`ex2bw-load`/`ex2bw-run` akzeptieren zusaetzlich `--project NAME` fuer das
+Ziel-Brightway-Projekt. Ohne `--project` wird vor dem Schreiben interaktiv
+aus den vorhandenen bw2data-Projekten gewaehlt (Default: das aktuell
+aktivierte Projekt). Am Ende des Schreibvorgangs wird das tatsaechlich
+verwendete Projekt in der Konsole ausgegeben.
 
 ## Entwicklung
 

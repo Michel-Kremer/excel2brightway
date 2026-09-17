@@ -14,6 +14,10 @@ verwendet (siehe config.resolve_workspace). Verhalten (Menue-Prompts,
 "Fortfahren? [j/N]"-Sicherheitsabfrage vor dem Schreiben nach Brightway,
 verkettete Check->Load-Frage) entspricht dem der fruehreren Einzelskripte.
 
+ex2bw-load/ex2bw-run nehmen zusaetzlich optional --project NAME entgegen
+(Ziel-Brightway-Projekt). Ohne --project wird interaktiv gefragt, Default
+ist das aktuell aktivierte bw2data-Projekt.
+
 Diese Funktionen geben bewusst nichts zurueck (siehe pyproject.toml
 [project.scripts]): der generierte Konsolenbefehl ruft sie als
 `sys.exit(func())` auf - ein Rueckgabewert ausser None/int wuerde dabei
@@ -63,10 +67,44 @@ def check(argv=None):
             load(["--workspace", str(ws.root)])
 
 
+def _project_argument(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--project", default=None,
+        help="Ziel-Brightway-Projekt (Default: aktuell aktiviertes Projekt, interaktive Auswahl moeglich)",
+    )
+
+
+def _choose_project(preselected=None) -> str:
+    """
+    Bestimmt das Ziel-Brightway-Projekt. preselected (z.B. aus --project)
+    wird ohne Rueckfrage uebernommen. Sonst interaktive Auswahl mit dem
+    aktuell aktivierten Projekt als Default.
+    """
+    import bw2data as bd
+
+    current = bd.projects.current
+    if preselected:
+        return preselected
+
+    available = sorted(p.name for p in bd.projects)
+    print(f"\nVerfuegbare Brightway-Projekte (aktuell aktiv: '{current}'):")
+    for i, name in enumerate(available, 1):
+        marker = "  <- aktuell aktiv" if name == current else ""
+        print(f"  [{i}] {name}{marker}")
+
+    choice = input(f"Welches Projekt? (Standard: aktuell aktiviertes '{current}'): ").strip()
+    if not choice:
+        return current
+    if choice.isdigit():
+        return available[int(choice) - 1]
+    return choice
+
+
 def load(argv=None):
     """Stufe 2: Laden in Brightway."""
     parser = argparse.ArgumentParser(description="Stufe 2: Laden in Brightway")
     _workspace_argument(parser)
+    _project_argument(parser)
     args = parser.parse_args(argv)
 
     ws = resolve_workspace(args.workspace)
@@ -95,16 +133,19 @@ def load(argv=None):
         print("Keine Auswahl, nichts zu tun.")
         return
 
+    project_name = _choose_project(args.project)
+
     print("\nFolgende Dateien werden nach Brightway geschrieben:")
     for path in selected:
         print(f"  - {path.name}")
+    print(f"Ziel-Projekt: '{project_name}'")
 
     confirm = input("Fortfahren? [j/N]: ").strip().lower()
     if confirm not in ("j", "ja", "y", "yes"):
         print("Abgebrochen.")
         return
 
-    brightway_writer.write_to_brightway(selected)
+    brightway_writer.write_to_brightway(selected, project_name=project_name)
 
 
 def tidy_registry(argv=None):
@@ -126,9 +167,11 @@ def run(argv=None):
     """Interaktives Menue: [1] Testen/Abgleichen  [2] Laden in Brightway."""
     parser = argparse.ArgumentParser(description="Menue: [1] Testen/Abgleichen  [2] Laden in Brightway")
     _workspace_argument(parser)
+    _project_argument(parser)
     args = parser.parse_args(argv)
 
     forwarded = ["--workspace", str(args.workspace)] if args.workspace else []
+    forwarded_load = forwarded + (["--project", args.project] if args.project else [])
 
     choice = input("Was moechtest du tun? [1] Testen/Abgleichen  [2] Laden in Brightway (Standard: 1): ").strip()
 
@@ -136,7 +179,7 @@ def run(argv=None):
         check(forwarded)
         return
     if choice == "2":
-        load(forwarded)
+        load(forwarded_load)
         return
 
     raise ValueError(f"Unbekannte Auswahl: '{choice}' (erwartet '1' oder '2')")

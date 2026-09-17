@@ -25,19 +25,87 @@ Niedrigschwelliger Direktaufruf ohne Workspace-Konzept:
 """
 
 import argparse
+import re
 from pathlib import Path
 
 import yaml
 
-PROJECT_NAME = "ecoinvent-3.12-cutoff"
+_VERSIONED_DB_RE = re.compile(r"(?i)^(?P<family>[a-z]+)[-_ ]?(?P<version>\d+(?:[.\-_]\d+)*)")
 
 
-def _ensure_project():
+def _check_dependencies(bd, activities: list, database: str) -> list:
+    """
+    Prueft VOR dem Schreiben, ob alle von 'activities' referenzierten
+    externen Datenbanken (z.B. 'ecoinvent-3.12-cutoff', 'biosphere3') im
+    aktuell aktiven Brightway-Projekt tatsaechlich vorhanden sind - ohne
+    das wuerde bw2data erst mitten im Schreibvorgang mit einer rohen
+    UnknownObject-Exception abbrechen (und eine halb geschriebene
+    Datenbank hinterlassen).
+    Gibt eine Liste Warnmeldungen zurueck (leer = alle Abhaengigkeiten da).
+    Bei einer fehlenden versionierten Datenbank (z.B. 'ecoinvent-3.12-
+    cutoff') wird zusaetzlich im Projekt nach anderen Versionen derselben
+    Familie gesucht (z.B. 'ecoinvent-3.10-cutoff'), um einen Versions-
+    Mismatch explizit zu benennen statt nur "fehlt" zu melden.
+    """
+    referenced = {
+        exch["input"][0]
+        for act in activities
+        for exch in act.get("exchanges", [])
+        if exch["input"][0] != database
+    }
+    if not referenced:
+        return []
+
+    existing = set(bd.databases)
+    warnings = []
+    for dep in sorted(referenced):
+        if dep in existing:
+            continue
+
+        match = _VERSIONED_DB_RE.match(dep)
+        family = match.group("family").lower() if match else None
+        same_family = sorted(
+            name for name in existing
+            if name != dep
+            and (m2 := _VERSIONED_DB_RE.match(name))
+            and family is not None
+            and m2.group("family").lower() == family
+        )
+        if same_family:
+            warnings.append(
+                f"Datenbank '{dep}' fehlt im Projekt '{bd.projects.current}' - "
+                f"stattdessen vorhanden: {', '.join(same_family)} (Versions-Mismatch)."
+            )
+        else:
+            warnings.append(f"Datenbank '{dep}' fehlt im Projekt '{bd.projects.current}'.")
+
+    return warnings
+
+
+def _resolve_project(project_name=None):
+    """
+    Aktiviert das Ziel-Brightway-Projekt fuer den Schreibvorgang.
+    project_name=None -> aktuell aktiviertes Projekt (bd.projects.current)
+    wird unveraendert verwendet. Sonst wird geprueft, dass project_name
+    unter den vorhandenen Projekten existiert (kein versehentliches
+    Neuanlegen bei Tippfehlern - bw2data.set_current() wuerde das sonst
+    stillschweigend tun) und dorthin gewechselt.
+    Gibt (bw2data-Modul, tatsaechlich aktiver Projektname) zurueck.
+    """
     import bw2data as bd
 
-    if bd.projects.current != PROJECT_NAME:
-        bd.projects.set_current(PROJECT_NAME)
-    return bd
+    if project_name is None:
+        return bd, bd.projects.current
+
+    existing = {p.name for p in bd.projects}
+    if project_name not in existing:
+        raise ValueError(
+            f"Brightway-Projekt '{project_name}' existiert nicht. "
+            f"Vorhandene Projekte: {', '.join(sorted(existing))}"
+        )
+    if bd.projects.current != project_name:
+        bd.projects.set_current(project_name)
+    return bd, project_name
 
 
 def load_resolved(path: Path):
@@ -103,21 +171,31 @@ def load_resolved(path: Path):
     return database, activities, raw.get("project_parameters"), raw.get("database_parameters")
 
 
-def write_to_brightway(paths) -> list:
+def write_to_brightway(paths, project_name=None) -> list:
     """
     Schreibt eine Liste resolved/<database>.yaml-Dateien nach Brightway.
+    project_name=None -> aktuell aktiviertes Brightway-Projekt (Default).
     Gibt eine Liste (database, Anzahl_Aktivitaeten) der geschriebenen
     Datenbanken zurueck.
     """
     from bw2io.importers.base_lci import LCIImporter
     from bw2data.parameters import ActivityParameter
 
-    _ensure_project()
+    bd, active_project = _resolve_project(project_name)
 
     written = []
     touched_groups = set()
     for path in paths:
-        database, activities, project_parameters, database_parameters = load_resolved(Path(path))
+        path = Path(path)
+        database, activities, project_parameters, database_parameters = load_resolved(path)
+
+        dependency_warnings = _check_dependencies(bd, activities, database)
+        if dependency_warnings:
+            print(f"\nWARNUNG - {path.name} in Projekt '{active_project}':")
+            for msg in dependency_warnings:
+                print(f"  - {msg}")
+            print(f"  '{database}' wird NICHT geschrieben (fehlende Abhaengigkeiten wuerden den Schreibvorgang abbrechen).")
+            continue
 
         # Gruppennamen VOR write_database() einsammeln (siehe bw2io.importers.
         # base_lci._prepare_activity_parameters: explizite 'group' aus dem
@@ -153,15 +231,24 @@ def write_to_brightway(paths) -> list:
     for group in touched_groups:
         ActivityParameter.recalculate(group)
 
+    if written:
+        print(f"\n-> Geschrieben in Brightway-Projekt: '{active_project}'")
+    else:
+        print(f"\n-> Nichts geschrieben in Brightway-Projekt '{active_project}' (siehe Warnungen oben).")
+
     return written
 
 
 def main():
     parser = argparse.ArgumentParser(description="resolved/*.yaml -> Brightway (Stufe 2)")
     parser.add_argument("paths", type=Path, nargs="+", help="Eine oder mehrere resolved/<database>.yaml")
+    parser.add_argument(
+        "--project", default=None,
+        help="Ziel-Brightway-Projekt (Default: aktuell aktiviertes Projekt)",
+    )
     args = parser.parse_args()
 
-    write_to_brightway(args.paths)
+    write_to_brightway(args.paths, project_name=args.project)
 
 
 if __name__ == "__main__":
