@@ -32,8 +32,8 @@ uv pip install --python <pfad-zur-ziel-umgebung>/python.exe -e .
 ```
 
 `bw2data` MUSS in derselben Major-Version installiert sein, die auch das
-Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 3.6.x, siehe
-`pyproject.toml`) - eine neuere Major-Version loest beim ersten
+Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 4.x, siehe
+`pyproject.toml`) - eine andere Major-Version loest beim ersten
 Projektzugriff eine automatische, irreversible Migration am geteilten
 Brightway-Projektordner aus.
 
@@ -61,6 +61,9 @@ variable `EX2BW_WORKSPACE` > aktuelles Arbeitsverzeichnis.
 
 ## Nutzung
 
+In der Umgebung, in der `excel2brightway` installiert ist (siehe
+Installation):
+
 ```
 conda activate <env-name>
 cd <workspace>
@@ -70,6 +73,10 @@ ex2bw-run                 # interaktives Menue fuer beide Stufen
 ex2bw-tidy-registry        # flow_registry.yaml aufraeumen (Dedupe + unit-Backfill)
 ```
 
+Bei der eigenstaendigen, von uv verwalteten Umgebung: `uv run` voranstellen
+(z. B. `uv run ex2bw-check`) und aus dem Projektverzeichnis heraus mit
+`--workspace <workspace>` aufrufen.
+
 Jeder Befehl akzeptiert `--workspace PATH`, um nicht aus dem Workspace heraus
 aufgerufen zu werden.
 
@@ -78,15 +85,3 @@ Ziel-Brightway-Projekt. Ohne `--project` wird vor dem Schreiben interaktiv
 aus den vorhandenen bw2data-Projekten gewaehlt (Default: das aktuell
 aktivierte Projekt). Am Ende des Schreibvorgangs wird das tatsaechlich
 verwendete Projekt in der Konsole ausgegeben.
-
-## Entwicklung
-
-```
-uv sync --extra test
-uv run pytest
-```
-
-`tests/fixtures/excel_formats/` enthaelt bw2io-Beispiel-Excel-Dateien fuer
-die Tests (Skip/Cutoff/Parameter/Formel-Handling). Kein Test schreibt nach
-Brightway - das beruehrt ein echtes, ggf. geteiltes Brightway-Projekt und
-bleibt manuelle Verifikation.

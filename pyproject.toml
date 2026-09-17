@@ -9,8 +9,8 @@ description = "Prueft LCI-/ecoinvent-Excel-Daten auf Korrektheit und schreibt si
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "bw2data>=3.6,<4",
-    "bw2io>=0.8,<0.9",
+    "bw2data>=4.0",
+    "bw2io>=0.9",
     "PyYAML>=6.0",
     "openpyxl>=3.1",
 ]

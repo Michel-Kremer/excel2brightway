@@ -208,6 +208,7 @@ def write_to_brightway(paths, project_name=None) -> list:
                 touched_groups.add(params[0].get("group") or f"{act['database']}:{act['code']}")
 
         imp = LCIImporter(database)
+        imp.data = activities  # bw2io >=0.9: write_database() liest self.data auch dann, wenn 'data=' explizit uebergeben wird (z.B. needs_multifunctional_database)
         imp.project_parameters = project_parameters
         imp.database_parameters = database_parameters
         if project_parameters:
