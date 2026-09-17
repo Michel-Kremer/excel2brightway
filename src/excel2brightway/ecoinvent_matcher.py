@@ -20,7 +20,7 @@ Standortwahl bei mehreren Kandidaten (z.B. gleicher Flow in DE/FR/GLO):
   4. sonst der (alphabetisch nach Ort) erste Kandidat
 
 WICHTIG: bw2data MUSS exakt in der Version installiert sein, die auch
-das Zielprojekt zuletzt geschrieben hat (siehe requirements-lock.txt).
+das Zielprojekt zuletzt geschrieben hat (siehe uv.lock/pyproject.toml).
 Eine neuere Major-Version loest beim ersten Projektzugriff eine
 automatische, irreversible Migration aus.
 

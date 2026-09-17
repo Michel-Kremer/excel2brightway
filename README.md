@@ -8,31 +8,39 @@ Formeln.
 
 ## Installation
 
-In der Ziel-Umgebung (Conda oder venv), die auch die passende
-`bw2data`-Version enthaelt:
+Dieses Projekt nutzt [uv](https://docs.astral.sh/uv/) fuer die
+Paketverwaltung. `pyproject.toml` legt die kompatiblen Versionsbereiche fest,
+`uv.lock` die daraus konkret aufgeloesten, reproduzierbaren Versionen
+(inklusive `bw2data`).
+
+Eigenstaendige, von uv verwaltete Umgebung (Standardfall):
 
 ```
-conda activate <env-name>
 cd <pfad-zum-projekt>
-pip install -e .
+uv sync
+uv run ex2bw-check
 ```
 
-Fuer exakt reproduzierbare, verifiziert funktionierende Paketversionen statt
-nur kompatibler Bereiche:
+`uv sync` legt bei Bedarf eine `.venv` im Projektverzeichnis an und
+installiert exakt die in `uv.lock` festgehaltenen Versionen.
+
+Installation in eine bereits bestehende Ziel-Umgebung (z. B. eine, die schon
+die zum Ziel-Brightway-Projekt passende `bw2data`-Version enthaelt):
 
 ```
-pip install -r requirements-lock.txt
+uv pip install --python <pfad-zur-ziel-umgebung>/python.exe -e .
 ```
 
 `bw2data` MUSS in derselben Major-Version installiert sein, die auch das
-Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 3.6.x) - eine neuere
-Major-Version loest beim ersten Projektzugriff eine automatische,
-irreversible Migration am geteilten Brightway-Projektordner aus.
+Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 3.6.x, siehe
+`pyproject.toml`) - eine neuere Major-Version loest beim ersten
+Projektzugriff eine automatische, irreversible Migration am geteilten
+Brightway-Projektordner aus.
 
-`pip install -e .` verankert den Paketpfad als absoluten Pfad in der
-Umgebung. Wird `<pfad-zum-projekt>` spaeter verschoben oder umbenannt, bricht
-die Installation und muss von `<pfad-zum-projekt>` aus erneut mit
-`pip install -e .` durchgefuehrt werden.
+Die editierbare Installation verankert den Paketpfad als absoluten Pfad in
+der Umgebung. Wird `<pfad-zum-projekt>` spaeter verschoben oder umbenannt,
+bricht die Installation und muss von `<pfad-zum-projekt>` aus erneut
+durchgefuehrt werden.
 
 ## Workspace
 
@@ -74,8 +82,8 @@ verwendete Projekt in der Konsole ausgegeben.
 ## Entwicklung
 
 ```
-pip install -e ".[test]"
-pytest
+uv sync --extra test
+uv run pytest
 ```
 
 `tests/fixtures/excel_formats/` enthaelt bw2io-Beispiel-Excel-Dateien fuer

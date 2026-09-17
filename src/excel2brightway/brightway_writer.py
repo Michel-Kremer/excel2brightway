@@ -16,7 +16,7 @@ ParameterizedExchange, inkl. Formel-Neuberechnung) - im Activity Browser
 editierbar/neu berechenbar, nicht nur einmalig statisch ausgewertet.
 
 WICHTIG: bw2data MUSS exakt in der Version installiert sein, die auch das
-Zielprojekt zuletzt geschrieben hat (siehe requirements-lock.txt).
+Zielprojekt zuletzt geschrieben hat (siehe uv.lock/pyproject.toml).
 
 Fuer den normalen Gebrauch siehe den Konsolenbefehl ex2bw-load (cli.py).
 Niedrigschwelliger Direktaufruf ohne Workspace-Konzept:
