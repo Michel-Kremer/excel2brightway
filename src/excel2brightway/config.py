@@ -12,6 +12,9 @@ ein beliebiger Ordner:
       output_excel2brightway/       Ausgabe: alles, was excel2brightway selbst
         flow_registry.yaml          schreibt/pflegt - getrennt von der
         unresolved.yaml             handgepflegten Eingabe.
+        load_warnings.yaml          Warnungen beim Einlesen (fehlende
+                                     Pflichtfelder, unbekannter Exchange-
+                                     Typ, fehlende amount/name, ...).
         resolved/
 
 Der Workspace ist NICHT Teil des Package-Codes (`src/excel2brightway/`) - das
@@ -61,6 +64,10 @@ class Workspace:
     @property
     def unresolved(self) -> Path:
         return self.output_dir / "unresolved.yaml"
+
+    @property
+    def load_warnings(self) -> Path:
+        return self.output_dir / "load_warnings.yaml"
 
     @property
     def resolved_dir(self) -> Path:

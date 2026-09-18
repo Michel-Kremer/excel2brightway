@@ -57,7 +57,7 @@ def _excel_flow_names(excel_dir: Path) -> set:
 
     names = set()
     try:
-        activities, _internal_index, _project_params, _database_params = excel_loader.load_clusters(excel_dir)
+        activities, _internal_index, _project_params, _database_params, _load_warnings = excel_loader.load_clusters(excel_dir)
     except Exception as exc:
         print(f"WARNUNG: Konnte {excel_dir} nicht laden ({exc}); Dedupe ohne Excel-Bezug.")
         return set()

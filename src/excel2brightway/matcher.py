@@ -156,14 +156,22 @@ def suggest(name: str, candidates: list, n=3, cutoff=0.6):
     return difflib.get_close_matches(normalize(name), candidates, n=n, cutoff=cutoff)
 
 
-def _try_ecoinvent_match(flow_name, exch_type, value, registry_section, new_entries):
+def _try_ecoinvent_match(flow_name, exch_type, value, registry_section, new_entries, ecoinvent_project, ecoinvent_prompt):
     """
     Letzter Auflösungsversuch, bevor ein Flow als unresolved gilt: Abgleich
-    gegen die lokale ecoinvent-/biosphere3-Datenbank (siehe ecoinvent_matcher.py).
-    Bei Treffer wird der Eintrag in `registry_section` (Cache fuer diesen
-    Lauf) und in `new_entries` (zum Anhaengen an flow_registry.yaml) abgelegt.
+    gegen eine lokale ecoinvent-/biosphere-Datenbank in `ecoinvent_project`
+    (siehe ecoinvent_matcher.py; `ecoinvent_project` ist None, wenn kein
+    Projekt gewaehlt wurde/verfuegbar ist - dann wird der Versuch
+    stillschweigend uebersprungen). `ecoinvent_prompt` erlaubt bei
+    mehrdeutiger 'database'-Zuordnung eine interaktive Rueckfrage (siehe
+    cli.py); ohne Callback bleibt der Flow in dem Fall unresolved. Bei
+    Treffer wird der Eintrag in `registry_section` (Cache fuer diesen Lauf)
+    und in `new_entries` (zum Anhaengen an flow_registry.yaml) abgelegt.
     Gibt den registry-kompatiblen Eintrag oder None zurueck.
     """
+    if not ecoinvent_project:
+        return None
+
     try:
         from . import ecoinvent_matcher
     except ImportError:
@@ -171,9 +179,15 @@ def _try_ecoinvent_match(flow_name, exch_type, value, registry_section, new_entr
 
     try:
         if exch_type == "technosphere":
-            entry = ecoinvent_matcher.match_technosphere(flow_name, value.get("location"))
+            entry = ecoinvent_matcher.match_technosphere(
+                ecoinvent_project, flow_name, location_hint=value.get("location"),
+                database_hint=value.get("database"), prompt=ecoinvent_prompt,
+            )
         else:
-            entry = ecoinvent_matcher.match_biosphere(flow_name)
+            entry = ecoinvent_matcher.match_biosphere(
+                ecoinvent_project, flow_name,
+                database_hint=value.get("database"), prompt=ecoinvent_prompt,
+            )
     except Exception as exc:
         print(f"WARNUNG: ecoinvent-Abgleich fuer '{flow_name}' fehlgeschlagen: {exc}")
         return None
@@ -188,7 +202,10 @@ def _try_ecoinvent_match(flow_name, exch_type, value, registry_section, new_entr
     return resolution
 
 
-def build_exchanges(activity, internal_index, registry, candidate_pool, unresolved, new_entries=None, use_ecoinvent=False):
+def build_exchanges(
+    activity, internal_index, registry, candidate_pool, unresolved, new_entries=None,
+    ecoinvent_project=None, ecoinvent_prompt=None,
+):
     """
     Baut die Exchange-Liste einer Aktivitaet (bw2io-artige Struktur) und
     sammelt nicht aufloesbare Flows in `unresolved`. Jeder aufgeloeste
@@ -196,6 +213,8 @@ def build_exchanges(activity, internal_index, registry, candidate_pool, unresolv
     einheitlich ueber 'input_database'/'input_code' - egal ob intern,
     ueber die Registry oder per ecoinvent-Abgleich gefunden -, damit
     Stufe 2 (Laden in Brightway) ohne erneuten Namens-Abgleich auskommt.
+    `ecoinvent_project`/`ecoinvent_prompt` siehe _try_ecoinvent_match();
+    `ecoinvent_project=None` deaktiviert den ecoinvent-Abgleich.
     """
     exchanges = []
 
@@ -214,8 +233,11 @@ def build_exchanges(activity, internal_index, registry, candidate_pool, unresolv
 
             resolution, kind = resolve_flow(flow_name, internal_index, registry_section)
 
-            if resolution is None and use_ecoinvent:
-                resolution = _try_ecoinvent_match(flow_name, exch_type, value, registry_section, new_entries)
+            if resolution is None and ecoinvent_project:
+                resolution = _try_ecoinvent_match(
+                    flow_name, exch_type, value, registry_section, new_entries,
+                    ecoinvent_project, ecoinvent_prompt,
+                )
                 if resolution is not None:
                     kind = "external"
 
@@ -394,6 +416,7 @@ def _write_resolved_files(
 def run(
     clusters: Path, registry: Path, out: Path,
     ecoinvent_fallback: bool = True, resolved_dir: Path = None,
+    warnings_out: Path = None, ecoinvent_project: str = None, ecoinvent_prompt=None,
 ):
     """
     Fuehrt den kompletten Test-/Abgleich-Durchlauf aus (ohne Kommandozeile).
@@ -401,12 +424,27 @@ def run(
     (*.xlsx im Brightway2-Excel-Format), die ueber bw2io eingelesen werden.
     `ecoinvent_fallback`: wenn True, werden Flows, die weder intern noch
     in flow_registry.yaml gefunden werden, zusaetzlich automatisch gegen
-    die lokale ecoinvent-Datenbank abgeglichen (siehe ecoinvent_matcher.py,
-    read-only). Treffer werden in flow_registry.yaml ergaenzt. Ist bw2data
-    nicht installiert oder das Projekt nicht erreichbar, wird der Abgleich
-    stillschweigend uebersprungen (Verhalten wie zuvor).
+    eine lokale ecoinvent-/biosphere-Datenbank abgeglichen (siehe
+    ecoinvent_matcher.py, read-only). Treffer werden in flow_registry.yaml
+    ergaenzt.
+    `ecoinvent_project`: Brightway-Projekt, in dem diese Datenbanken liegen
+    - kommt von aussen (siehe cli.py, das den Nutzer einmal fragt), nichts
+    davon ist hier hardcodiert. Ist `ecoinvent_fallback` True, aber
+    `ecoinvent_project` None (z.B. bw2data nicht installiert, kein Projekt
+    gewaehlt, oder direkter Bibliotheksaufruf ohne Projekt), wird der
+    Abgleich stillschweigend uebersprungen.
+    `ecoinvent_prompt`: optionaler Callback `prompt(label, candidates) ->
+    db_name_oder_None` fuer den Fall, dass die 'database'-Spalte einer
+    Exchange-Zeile nicht eindeutig einer Datenbank im Projekt zugeordnet
+    werden kann (siehe ecoinvent_matcher._resolve_database). Ohne Callback
+    bleibt der betroffene Flow dann unresolved statt geraten zu werden.
     `resolved_dir`: Verzeichnis fuer resolved/<database>.yaml (Stufe-2-
     Eingabe). Wird `None` uebergeben, wird kein resolved-Output geschrieben.
+    `warnings_out`: Zieldatei fuer die beim Einlesen gesammelten Warnungen
+    (siehe excel_loader.load_clusters) - fehlende Pflichtfelder, unbekannter
+    Exchange-Typ, fehlende amount/reference product/name usw. Wird `None`
+    uebergeben (Default), wird keine Datei geschrieben; die einzelnen
+    Meldungen bleiben dann nur als Rueckgabewert erreichbar.
     Gibt (parsed_activities, unresolved) zurueck.
       parsed_activities: {(database, id): bw2io-artiges Aktivitaets-Dict}
       unresolved: Liste nicht aufgeloester Flows (leer = alles sauber)
@@ -415,7 +453,7 @@ def run(
     exclude = {registry.resolve(), out.resolve()}
 
     from . import excel_loader  # lazy: bw2io nur noetig, wenn der Abgleich tatsaechlich laeuft
-    activities, internal_index, project_parameters, database_parameters = excel_loader.load_clusters(
+    activities, internal_index, project_parameters, database_parameters, load_warnings = excel_loader.load_clusters(
         clusters, exclude=exclude,
     )
 
@@ -433,7 +471,9 @@ def run(
     for act in activities:
         exchanges = build_exchanges(
             act, internal_index, registry_data, candidate_pool, unresolved,
-            new_entries=new_registry_entries, use_ecoinvent=ecoinvent_fallback,
+            new_entries=new_registry_entries,
+            ecoinvent_project=ecoinvent_project if ecoinvent_fallback else None,
+            ecoinvent_prompt=ecoinvent_prompt,
         )
         parsed = {
             "name": act["name"],
@@ -449,6 +489,14 @@ def run(
         parsed_activities[(act["_database"], act["id"])] = parsed
 
     print(f"{len(activities)} Aktivitaeten geladen, {len(unresolved)} Flow(s) nicht aufgeloest.")
+
+    if warnings_out is not None:
+        with open(warnings_out, "w", encoding="utf-8") as f:
+            yaml.dump(load_warnings, f, allow_unicode=True, sort_keys=False)
+        if load_warnings:
+            print(f"-> {len(load_warnings)} Warnung(en) beim Einlesen, Details in {warnings_out}")
+        else:
+            print(f"-> keine Warnungen beim Einlesen; {warnings_out} geleert.")
 
     matched_count = sum(len(v) for v in new_registry_entries.values())
     if matched_count:
@@ -492,6 +540,10 @@ def main():
     parser.add_argument("--registry", type=Path, required=True, help="Pfad zu flow_registry.yaml")
     parser.add_argument("--out", type=Path, default=Path("unresolved.yaml"), help="Ausgabedatei fuer unresolved Flows")
     parser.add_argument(
+        "--warnings-out", type=Path, default=Path("load_warnings.yaml"),
+        help="Ausgabedatei fuer Warnungen beim Einlesen (fehlende Pflichtfelder, unbekannter Exchange-Typ, ...)",
+    )
+    parser.add_argument(
         "--resolved-dir", type=Path, default=Path("resolved"),
         help="Ausgabeverzeichnis fuer resolved/<database>.yaml (Stufe-2-Eingabe); leer lassen mit --no-resolved-dir",
     )
@@ -503,11 +555,21 @@ def main():
         "--no-ecoinvent", dest="ecoinvent_fallback", action="store_false",
         help="Keinen automatischen Abgleich gegen ecoinvent fuer unresolved Flows versuchen",
     )
+    parser.add_argument(
+        "--ecoinvent-project", default=None,
+        help=(
+            "Brightway-Projekt fuer den ecoinvent-Abgleich (enthaelt die ecoinvent-/"
+            "biosphere-Datenbank). Ohne Angabe wird der Abgleich stillschweigend "
+            "uebersprungen - dieser Direktaufruf fragt nicht interaktiv nach (siehe "
+            "cli.py/ex2bw-check fuer die interaktive Variante)."
+        ),
+    )
     args = parser.parse_args()
 
     run(
         args.clusters, args.registry, args.out,
         ecoinvent_fallback=args.ecoinvent_fallback, resolved_dir=args.resolved_dir,
+        warnings_out=args.warnings_out, ecoinvent_project=args.ecoinvent_project,
     )
 
 

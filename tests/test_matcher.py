@@ -130,6 +130,41 @@ def test_resolved_file_only_written_when_fully_resolved(workbook_factory, tmp_pa
     assert not (resolved_dir / "DB1.yaml").exists()
 
 
+def test_warnings_out_collects_exchange_warnings(workbook_factory, tmp_path):
+    workbook_factory(
+        "cluster.xlsx",
+        {
+            "Data": [
+                ["Database", "DB1"],
+                BLANK,
+                ["Activity", "Act A"],
+                ["code", "a"],
+                ["unit", "kg"],
+                ["location", "GLO"],
+                ["production amount", 1],
+                ["Exchanges"],
+                ["name", "amount", "unit", "database", "location", "type"],
+                ["Act A", 1, "kg", "DB1", "GLO", "production"],
+                ["Broken Flow", None, "kg", "DB1", "GLO", "technosphere"],
+            ],
+        },
+    )
+    registry = _write_registry(tmp_path)
+    out = tmp_path / "unresolved.yaml"
+    warnings_out = tmp_path / "load_warnings.yaml"
+
+    matcher.run(
+        clusters=tmp_path, registry=registry, out=out,
+        ecoinvent_fallback=False, resolved_dir=None, warnings_out=warnings_out,
+    )
+
+    assert warnings_out.exists()
+    load_warnings = yaml.safe_load(warnings_out.read_text(encoding="utf-8"))
+    assert len(load_warnings) == 1
+    assert load_warnings[0]["kind"] == "missing_amount"
+    assert load_warnings[0]["source_file"] == "cluster.xlsx"
+
+
 def test_formula_and_parameters_reach_resolved_yaml(workbook_factory, tmp_path):
     workbook_factory(
         "cluster.xlsx",

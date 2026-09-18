@@ -40,7 +40,7 @@ def test_skip_sheet_is_ignored(workbook_factory):
         },
     )
 
-    activities, internal_index, project_params, database_params = excel_loader.load_clusters(path.parent)
+    activities, internal_index, project_params, database_params, load_warnings = excel_loader.load_clusters(path.parent)
 
     assert len(activities) == 1
     assert activities[0]["name"] == "Act A"
@@ -88,6 +88,26 @@ def test_formula_exchange_without_amount_is_not_an_error(workbook_factory, capsy
     assert "WARNUNG" not in out
 
 
+def test_exchange_warnings_are_collected_not_printed(workbook_factory, capsys):
+    # Exchange ohne 'amount' und ohne 'formula' -> Warnung. Frueher wurde das
+    # sofort einzeln gedruckt; jetzt landet es in load_warnings und die
+    # Konsole zeigt nur eine Anzahl (siehe excel_loader.load_clusters).
+    rows = _minimal_activity_rows()
+    rows.append(["Some Flow", None, "kg", "DB1", "GLO", "technosphere"])
+    path = workbook_factory("bad_exchange.xlsx", {"Data": rows})
+
+    activities, internal_index, project_params, database_params, load_warnings = excel_loader.load_clusters(path.parent)
+
+    assert len(load_warnings) == 1
+    assert load_warnings[0]["kind"] == "missing_amount"
+    assert load_warnings[0]["source_file"] == "bad_exchange.xlsx"
+    assert load_warnings[0]["activity"] == "Act A"
+
+    out = capsys.readouterr().out
+    assert "WARNUNG" not in out
+    assert "1 Warnung(en)" in out
+
+
 def test_activity_comment_is_captured(workbook_factory):
     rows = _minimal_activity_rows()
     rows.insert(4, ["comment", "eine Beschreibung"])
@@ -105,7 +125,7 @@ def test_sample_activities_with_variables_fixture(fixtures_dir: Path, tmp_path):
     import shutil
     shutil.copy(fixtures_dir / "sample_activities_with_variables.xlsx", tmp_path)
 
-    activities, internal_index, project_params, database_params = excel_loader.load_clusters(tmp_path)
+    activities, internal_index, project_params, database_params, load_warnings = excel_loader.load_clusters(tmp_path)
 
     mpcb = next(a for a in activities if a["id"] == "mpcb")
     assert mpcb["comment"] == "something important here maybe?"

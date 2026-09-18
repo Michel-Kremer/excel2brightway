@@ -60,6 +60,13 @@ gesetzt - als Override in den Exchange uebernommen. Hat eine Exchange-
 Zeile eine 'formula', darf 'amount' bewusst leer sein (der Wert kommt
 dann erst beim Schreiben nach Brightway aus der Formel) - das ist kein
 Fehlerfall.
+
+Probleme bei einzelnen Aktivitaeten/Exchanges (fehlende Pflichtfelder,
+unbekannter Exchange-Typ, fehlende amount/reference product/name, ...)
+werden nicht mehr einzeln auf der Konsole ausgegeben, sondern in
+load_clusters() gesammelt zurueckgegeben (siehe dort) und pro Datei nur als
+Anzahl angezeigt - der Aufrufer (matcher.run) schreibt die Details nach
+load_warnings.yaml.
 """
 
 from pathlib import Path
@@ -95,13 +102,15 @@ def _clean(value):
     return None if value in UNKNOWN_MARKERS else value
 
 
-def _warn_cutoff_hidden_columns(path: Path):
+def _warn_cutoff_hidden_columns(path: Path, warnings: list):
     """
     Rein lesende Pruefung (keine Datei- oder Datenaenderung): meldet pro
     Blatt mit 'cutoff' in Zelle A1, ob eine von bw2io/bw2data erkannte
     Spalte (z.B. 'formula') durch den deklarierten Cutoff-Wert verdeckt
     wird. Die Behebung (Cutoff im Excel erhoehen oder Spalte davor
-    verschieben) liegt beim Nutzer - wir greifen nicht ein.
+    verschieben) liegt beim Nutzer - wir greifen nicht ein. Selten (hoechstens
+    einmal pro Blatt) und blattuebergreifend relevant, daher weiterhin sofort
+    auf der Konsole gemeldet (zusaetzlich zum Eintrag in `warnings`).
     """
     try:
         raw_sheets = ExcelExtractor.extract(str(path))
@@ -140,19 +149,27 @@ def _warn_cutoff_hidden_columns(path: Path):
                 f"'{name}' (Spalte {index + 1})"
                 for name, index in sorted(hidden.items(), key=lambda kv: kv[1])
             )
-            print(
-                f"WARNUNG: {path.name}: Blatt '{sheet_name}' hat cutoff={cutoff}, dadurch "
+            message = (
+                f"{path.name}: Blatt '{sheet_name}' hat cutoff={cutoff}, dadurch "
                 f"werden folgende von Brightway erkannte Spalten NICHT eingelesen: {cols}. "
                 f"Falls das nicht gewollt ist: Cutoff im Excel erhoehen oder die Spalte(n) "
                 f"davor verschieben."
             )
+            print(f"WARNUNG: {message}")
+            warnings.append({
+                "source_file": path.name, "activity": None, "level": "WARNUNG",
+                "kind": "cutoff_hidden_column", "message": message,
+            })
 
 
-def _activity_from_bw2io(raw: dict, source_file: str):
+def _activity_from_bw2io(raw: dict, source_file: str, warnings: list):
     """
     Baut aus einem bw2io-Aktivitaetsdict (imp.data) das gemeinsame
     Aktivitaets-Dict, das matcher.build_exchanges() erwartet. Gibt None
-    zurueck (mit Warnung), wenn Pflichtfelder fehlen.
+    zurueck, wenn Pflichtfelder fehlen (Grund landet in `warnings`, siehe
+    load_clusters() fuer die pro-Datei-Zusammenfassung auf der Konsole -
+    einzelne Exchange-Probleme werden hier NICHT mehr sofort gedruckt,
+    das haette bei vielen Fehlern die Konsole zugemuellt).
     """
     name = raw.get("name")
     database = raw.get("database")
@@ -166,10 +183,11 @@ def _activity_from_bw2io(raw: dict, source_file: str):
         if not value
     ]
     if missing:
-        print(
-            f"WARNUNG: {source_file}: Aktivitaet '{name}' hat fehlende Pflichtfelder "
-            f"{missing}, wird uebersprungen."
-        )
+        warnings.append({
+            "source_file": source_file, "activity": name, "level": "WARNUNG",
+            "kind": "missing_required_field",
+            "message": f"Aktivitaet '{name}' hat fehlende Pflichtfelder {missing}, wird uebersprungen.",
+        })
         return None
 
     act = {
@@ -203,10 +221,14 @@ def _activity_from_bw2io(raw: dict, source_file: str):
             continue
 
         if exch_type not in ("technosphere", "biosphere"):
-            print(
-                f"WARNUNG: {source_file}: Exchange-Zeile mit unbekanntem type "
-                f"'{row.get('type')}' in Aktivitaet '{name}' wird uebersprungen."
-            )
+            warnings.append({
+                "source_file": source_file, "activity": name, "level": "WARNUNG",
+                "kind": "unknown_exchange_type",
+                "message": (
+                    f"Exchange-Zeile mit unbekanntem type '{row.get('type')}' "
+                    f"in Aktivitaet '{name}' wird uebersprungen."
+                ),
+            })
             continue
 
         formula = _clean(row.get("formula"))
@@ -220,10 +242,14 @@ def _activity_from_bw2io(raw: dict, source_file: str):
                 # Platzhalter wie im bw2io-Beispiel (sample_activities_with_variables.xlsx).
                 amount = 0.0
             else:
-                print(
-                    f"WARNUNG: {source_file}: Exchange-Zeile ohne gueltige 'amount' in "
-                    f"Aktivitaet '{name}' wird uebersprungen ({row})."
-                )
+                warnings.append({
+                    "source_file": source_file, "activity": name, "level": "WARNUNG",
+                    "kind": "missing_amount",
+                    "message": (
+                        f"Exchange-Zeile ohne gueltige 'amount' in Aktivitaet "
+                        f"'{name}' wird uebersprungen ({row})."
+                    ),
+                })
                 continue
 
         value = {"amount": amount, "unit": row.get("unit")}
@@ -242,26 +268,34 @@ def _activity_from_bw2io(raw: dict, source_file: str):
         if exch_type == "technosphere":
             flow_key = _clean(row.get("reference product")) or _clean(row.get("name"))
             if not flow_key:
-                print(
-                    f"WARNUNG: {source_file}: technosphere-Exchange ohne 'reference product'/'name' "
-                    f"in Aktivitaet '{name}' wird uebersprungen."
-                )
+                warnings.append({
+                    "source_file": source_file, "activity": name, "level": "WARNUNG",
+                    "kind": "missing_technosphere_key",
+                    "message": (
+                        f"technosphere-Exchange ohne 'reference product'/'name' "
+                        f"in Aktivitaet '{name}' wird uebersprungen."
+                    ),
+                })
                 continue
             act["in"][flow_key] = value
         else:
             flow_key = _clean(row.get("name"))
             if not flow_key:
-                print(
-                    f"WARNUNG: {source_file}: biosphere-Exchange ohne 'name' in Aktivitaet "
-                    f"'{name}' wird uebersprungen."
-                )
+                warnings.append({
+                    "source_file": source_file, "activity": name, "level": "WARNUNG",
+                    "kind": "missing_biosphere_name",
+                    "message": (
+                        f"biosphere-Exchange ohne 'name' in Aktivitaet '{name}' "
+                        f"wird uebersprungen."
+                    ),
+                })
                 continue
             act["emit"][flow_key] = value
 
     return act
 
 
-def _parse_workbook(path: Path):
+def _parse_workbook(path: Path, warnings: list):
     """
     Liest eine Cluster-Excel-Datei ueber bw2io. Gibt (activities,
     project_parameters, database_parameters) zurueck; die beiden
@@ -269,29 +303,33 @@ def _parse_workbook(path: Path):
     Bloecke enthaelt (siehe bw2io.ExcelImporter.project_parameters/
     .database_parameters).
     """
-    _warn_cutoff_hidden_columns(path)
+    _warn_cutoff_hidden_columns(path, warnings)
 
     importer = ExcelImporter(str(path))
     activities = []
     for raw in importer.data or []:
-        finalized = _activity_from_bw2io(raw, path.name)
+        finalized = _activity_from_bw2io(raw, path.name, warnings)
         if finalized is not None:
             activities.append(finalized)
     return activities, importer.project_parameters, importer.database_parameters
 
 
-def _merge_parameters(target: dict, new_entries, kind_label: str, source_file: str):
-    """Fuegt project_parameters/database_parameters aus einer Datei zusammen (name-Konflikt -> WARNUNG, letzter Wert gewinnt)."""
+def _merge_parameters(target: dict, new_entries, kind_label: str, source_file: str, warnings: list):
+    """Fuegt project_parameters/database_parameters aus einer Datei zusammen (name-Konflikt -> Warnung, letzter Wert gewinnt)."""
     if not new_entries:
         return
     for entry in new_entries:
         entry_name = entry.get("name")
         existing = target.get(entry_name)
         if existing is not None and existing != entry:
-            print(
-                f"WARNUNG: {source_file}: {kind_label}-Parameter '{entry_name}' war bereits mit "
-                f"anderem Wert definiert, wird durch diese Datei ueberschrieben."
-            )
+            warnings.append({
+                "source_file": source_file, "activity": None, "level": "WARNUNG",
+                "kind": "parameter_conflict",
+                "message": (
+                    f"{kind_label}-Parameter '{entry_name}' war bereits mit anderem Wert "
+                    f"definiert, wird durch diese Datei ueberschrieben."
+                ),
+            })
         target[entry_name] = entry
 
 
@@ -302,14 +340,27 @@ def load_clusters(directory: Path, exclude: set = frozenset()):
     `exclude` sind aufgeloeste Pfade, die NICHT als Cluster-Datei
     behandelt werden sollen, auch wenn sie im selben Ordner liegen.
     Gibt (activities, internal_index, project_parameters,
-    database_parameters) zurueck. project_parameters/database_parameters
-    sind Listen von {name, amount, formula, ...}-Dicts (None, wenn keine
-    Datei entsprechende Bloecke hat), ueber alle geladenen Dateien
-    zusammengefuehrt.
+    database_parameters, warnings) zurueck. project_parameters/
+    database_parameters sind Listen von {name, amount, formula, ...}-Dicts
+    (None, wenn keine Datei entsprechende Bloecke hat), ueber alle
+    geladenen Dateien zusammengefuehrt.
+
+    `warnings` ist eine flache Liste von {source_file, activity, level,
+    kind, message}-Dicts - alle beim Einlesen einzelner Aktivitaeten/
+    Exchanges aufgetretenen Probleme (fehlende Pflichtfelder, unbekannter
+    Exchange-Typ, fehlende amount/reference product/name, Parameter-
+    Konflikte). Diese werden NICHT mehr einzeln auf der Konsole ausgegeben
+    (bei vielen Fehlern waere das unuebersichtlich) - stattdessen druckt
+    diese Funktion pro Datei nur eine Zusammenfassungszeile mit Anzahl, und
+    der Aufrufer (siehe matcher.run) schreibt die volle Liste z.B. nach
+    load_warnings.yaml. Datei-weite Probleme (gesperrte/kaputte Datei,
+    keine gueltigen Aktivitaeten) sind selten und werden weiterhin sofort
+    gedruckt.
     """
     activities = []
     project_parameters = {}
     database_parameters = {}
+    warnings = []
 
     for path in sorted(directory.glob("*.xlsx")):
         if path.name.startswith("~$"):
@@ -318,26 +369,48 @@ def load_clusters(directory: Path, exclude: set = frozenset()):
         if path.resolve() in exclude:
             continue
 
+        warnings_before = len(warnings)
         try:
-            file_activities, file_project_params, file_database_params = _parse_workbook(path)
+            file_activities, file_project_params, file_database_params = _parse_workbook(path, warnings)
         except PermissionError:
-            print(f"WARNUNG: {path.name} ist gerade gesperrt (z.B. in Excel geoeffnet), wird uebersprungen.")
+            message = f"{path.name} ist gerade gesperrt (z.B. in Excel geoeffnet), wird uebersprungen."
+            print(f"WARNUNG: {message}")
+            warnings.append({
+                "source_file": path.name, "activity": None, "level": "WARNUNG",
+                "kind": "file_locked", "message": message,
+            })
             continue
         except Exception as exc:
             # Formatfehler (bw2io.ExcelImporter, z.B. fehlende/doppelte 'Database'-Zeile,
             # fehlende Spaltenkoepfe in Exchanges, kaputtes 'cutoff') sollen NICHT den
             # gesamten Lauf abbrechen - nur diese eine Datei wird uebersprungen, die
             # uebrigen Excel-Dateien werden trotzdem geprueft.
-            print(f"FEHLER: {path.name} hat kein gueltiges Brightway2-Excel-Format ({type(exc).__name__}: {exc}), wird uebersprungen.")
+            message = f"{path.name} hat kein gueltiges Brightway2-Excel-Format ({type(exc).__name__}: {exc}), wird uebersprungen."
+            print(f"FEHLER: {message}")
+            warnings.append({
+                "source_file": path.name, "activity": None, "level": "FEHLER",
+                "kind": "invalid_format", "message": message,
+            })
             continue
 
         if not file_activities:
-            print(f"WARNUNG: {path.name} enthaelt keine (gueltigen) Aktivitaeten, wird uebersprungen.")
+            message = f"{path.name} enthaelt keine (gueltigen) Aktivitaeten, wird uebersprungen."
+            print(f"WARNUNG: {message}")
+            warnings.append({
+                "source_file": path.name, "activity": None, "level": "WARNUNG",
+                "kind": "no_activities", "message": message,
+            })
             continue
 
         activities.extend(file_activities)
-        _merge_parameters(project_parameters, file_project_params, "Projekt", path.name)
-        _merge_parameters(database_parameters, file_database_params, "Datenbank", path.name)
+        _merge_parameters(project_parameters, file_project_params, "Projekt", path.name, warnings)
+        _merge_parameters(database_parameters, file_database_params, "Datenbank", path.name, warnings)
+
+        file_warning_count = len(warnings) - warnings_before
+        summary = f"{path.name}: {len(file_activities)} Aktivitaet(en) eingelesen"
+        if file_warning_count:
+            summary += f", {file_warning_count} Warnung(en)"
+        print(summary)
 
     internal_index = build_internal_index(activities)
     return (
@@ -345,4 +418,5 @@ def load_clusters(directory: Path, exclude: set = frozenset()):
         internal_index,
         list(project_parameters.values()) or None,
         list(database_parameters.values()) or None,
+        warnings,
     )

@@ -18,6 +18,14 @@ ex2bw-load/ex2bw-run nehmen zusaetzlich optional --project NAME entgegen
 (Ziel-Brightway-Projekt). Ohne --project wird interaktiv gefragt, Default
 ist das aktuell aktivierte bw2data-Projekt.
 
+ex2bw-check fragt (sofern der ecoinvent-Abgleich nicht per --no-ecoinvent
+deaktiviert ist und bw2data verfuegbar ist) zusaetzlich einmal nach dem
+Brightway-Projekt, das die ecoinvent-/biosphere-Datenbank fuer den Abgleich
+enthaelt (siehe ecoinvent_matcher.py - dort ist nichts hardcodiert). Wird
+danach direkt nach Brightway geladen, dient dasselbe Projekt als Default
+fuer die --project-Abfrage in ex2bw-load, es wird also nicht zweimal
+gefragt.
+
 Diese Funktionen geben bewusst nichts zurueck (siehe pyproject.toml
 [project.scripts]): der generierte Konsolenbefehl ruft sie als
 `sys.exit(func())` auf - ein Rueckgabewert ausser None/int wuerde dabei
@@ -55,16 +63,41 @@ def check(argv=None):
     ws = resolve_workspace(args.workspace)
     ws.ensure()
 
+    # Projekt fuer den ecoinvent-Abgleich einmal vorab fragen (statt hardcodiert,
+    # siehe ecoinvent_matcher.py) - nur wenn der Abgleich ueberhaupt versucht wird
+    # und bw2data verfuegbar ist; sonst wie zuvor stillschweigend uebersprungen.
+    ecoinvent_project = None
+    if args.ecoinvent_fallback:
+        try:
+            import bw2data  # noqa: F401 -- nur um Verfuegbarkeit/Erreichbarkeit zu pruefen
+        except ImportError:
+            pass
+        else:
+            try:
+                ecoinvent_project = _choose_project(
+                    prompt_label="Welches Projekt enthaelt die ecoinvent-/biosphere-Datenbank fuer den Abgleich"
+                )
+            except Exception as exc:
+                print(f"WARNUNG: Projektauswahl fuer ecoinvent-Abgleich fehlgeschlagen ({exc}), wird uebersprungen.")
+
     parsed_activities, unresolved = matcher.run(
         clusters=ws.root, registry=ws.registry, out=ws.unresolved,
         ecoinvent_fallback=args.ecoinvent_fallback, resolved_dir=ws.resolved_dir,
+        warnings_out=ws.load_warnings,
+        ecoinvent_project=ecoinvent_project,
+        ecoinvent_prompt=_ecoinvent_db_prompt if ecoinvent_project else None,
     )
 
     if not unresolved:
         print(f"\nAlles aufgeloest. Naechster Schritt: ex2bw-load (liest {ws.resolved_dir}).")
         choice = input("Jetzt direkt nach Brightway laden? [j/N]: ").strip().lower()
         if choice in ("j", "ja", "y", "yes"):
-            load(["--workspace", str(ws.root)])
+            # Bereits gewaehltes ecoinvent-Projekt als Default fuer den Schreib-Schritt
+            # mitgeben (oft dasselbe Projekt), damit nicht zweimal gefragt wird.
+            forwarded = ["--workspace", str(ws.root)]
+            if ecoinvent_project:
+                forwarded += ["--project", ecoinvent_project]
+            load(forwarded)
 
 
 def _project_argument(parser: argparse.ArgumentParser):
@@ -74,11 +107,13 @@ def _project_argument(parser: argparse.ArgumentParser):
     )
 
 
-def _choose_project(preselected=None) -> str:
+def _choose_project(preselected=None, prompt_label="Welches Projekt") -> str:
     """
-    Bestimmt das Ziel-Brightway-Projekt. preselected (z.B. aus --project)
+    Bestimmt ein Brightway-Projekt (Ziel zum Schreiben ODER Quelle fuer den
+    ecoinvent-Abgleich, siehe Aufrufer). preselected (z.B. aus --project)
     wird ohne Rueckfrage uebernommen. Sonst interaktive Auswahl mit dem
-    aktuell aktivierten Projekt als Default.
+    aktuell aktivierten Projekt als Default. `prompt_label` passt den
+    Fragetext an den jeweiligen Zweck an.
     """
     import bw2data as bd
 
@@ -92,11 +127,47 @@ def _choose_project(preselected=None) -> str:
         marker = "  <- aktuell aktiv" if name == current else ""
         print(f"  [{i}] {name}{marker}")
 
-    choice = input(f"Welches Projekt? (Standard: aktuell aktiviertes '{current}'): ").strip()
+    choice = input(f"{prompt_label}? (Standard: aktuell aktiviertes '{current}'): ").strip()
     if not choice:
         return current
     if choice.isdigit():
         return available[int(choice) - 1]
+    return choice
+
+
+def _ecoinvent_db_prompt(label, candidates):
+    """
+    Rueckfrage-Callback fuer matcher.run(ecoinvent_prompt=...): wird nur
+    aufgerufen, wenn die 'database'-Spalte einer Exchange-Zeile (`label`,
+    kann None sein) nicht eindeutig einer Datenbank im zuvor gewaehlten
+    ecoinvent-Projekt zugeordnet werden konnte (siehe
+    ecoinvent_matcher._resolve_database). Wird pro Label nur einmal
+    aufgerufen (Ergebnis wird dort gecacht).
+    """
+    if label:
+        print(
+            f"\nKonnte die im Excel angegebene Datenbank '{label}' nicht eindeutig "
+            f"einer Datenbank im gewaehlten Projekt zuordnen."
+        )
+    else:
+        print(
+            "\nFuer den ecoinvent-Abgleich wird eine Datenbank im gewaehlten Projekt "
+            "benoetigt (keine 'database'-Angabe im Excel gefunden)."
+        )
+
+    if not candidates:
+        print("(Projekt enthaelt keine Datenbanken.)")
+        return None
+
+    print("Verfuegbare Datenbanken:")
+    for i, name in enumerate(candidates, 1):
+        print(f"  [{i}] {name}")
+
+    choice = input("Welche verwenden? (leer = fuer dieses Label ueberspringen): ").strip()
+    if not choice:
+        return None
+    if choice.isdigit() and 1 <= int(choice) <= len(candidates):
+        return candidates[int(choice) - 1]
     return choice
 
 

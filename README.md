@@ -53,6 +53,8 @@ Package-Code liegt:
   output_excel2brightway/    Ausgabe: alles, was excel2brightway selbst schreibt
     flow_registry.yaml
     unresolved.yaml
+    load_warnings.yaml       Warnungen beim Einlesen (fehlende Pflichtfelder,
+                              unbekannter Exchange-Typ, fehlende amount/name, ...)
     resolved/
 ```
 
