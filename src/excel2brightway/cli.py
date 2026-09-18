@@ -26,6 +26,14 @@ danach direkt nach Brightway geladen, dient dasselbe Projekt als Default
 fuer die --project-Abfrage in ex2bw-load, es wird also nicht zweimal
 gefragt.
 
+ex2bw-tidy-registry fragt (sofern Bereinigen und/oder Backfill nicht per
+--no-prune-stale/--no-backfill deaktiviert sind und bw2data verfuegbar ist)
+ebenso einmal nach dem Brightway-Projekt (siehe tidy_flow_registry.py -
+auch dort nichts hardcodiert). Damit werden veraltete flow_registry.yaml-
+Eintraege (z.B. nach einem ecoinvent-Versionswechsel) entfernt statt
+falsch umbenannt zu werden - sie werden beim naechsten ex2bw-check frisch
+neu aufgeloest.
+
 Diese Funktionen geben bewusst nichts zurueck (siehe pyproject.toml
 [project.scripts]): der generierte Konsolenbefehl ruft sie als
 `sys.exit(func())` auf - ein Rueckgabewert ausser None/int wuerde dabei
@@ -220,18 +228,45 @@ def load(argv=None):
 
 
 def tidy_registry(argv=None):
-    """flow_registry.yaml aufraeumen (Dedupe + unit-Backfill)."""
-    parser = argparse.ArgumentParser(description="flow_registry.yaml aufraeumen (Dedupe + unit-Backfill)")
+    """flow_registry.yaml aufraeumen (Dedupe + Bereinigen + unit-Backfill)."""
+    parser = argparse.ArgumentParser(description="flow_registry.yaml aufraeumen (Dedupe + Bereinigen + unit-Backfill)")
     _workspace_argument(parser)
+    _project_argument(parser)
     parser.add_argument(
         "--no-backfill", dest="backfill", action="store_false",
-        help="Nur Dedupe, kein bw2data-Zugriff",
+        help="Kein unit/categories-Backfill aus Brightway",
+    )
+    parser.add_argument(
+        "--no-prune-stale", dest="prune_stale", action="store_false",
+        help="Eintraege mit fehlender Datenbank im gewaehlten Projekt NICHT entfernen",
     )
     args = parser.parse_args(argv)
 
     ws = resolve_workspace(args.workspace)
     ws.ensure()
-    tidy_flow_registry.tidy_registry(ws.registry, ws.root, backfill=args.backfill)
+
+    # Projekt fuer Bereinigen/Backfill einmal vorab fragen (statt hardcodiert,
+    # siehe tidy_flow_registry.py) - nur wenn ueberhaupt einer der beiden
+    # Schritte laufen soll und bw2data verfuegbar ist; sonst wie zuvor
+    # stillschweigend uebersprungen.
+    project = None
+    if args.backfill or args.prune_stale:
+        try:
+            import bw2data  # noqa: F401 -- nur um Verfuegbarkeit/Erreichbarkeit zu pruefen
+        except ImportError:
+            pass
+        else:
+            try:
+                project = _choose_project(
+                    args.project, prompt_label="Welches Projekt fuer Bereinigen/Backfill verwenden"
+                )
+            except Exception as exc:
+                print(f"WARNUNG: Projektauswahl fehlgeschlagen ({exc}), Bereinigen/Backfill werden uebersprungen.")
+
+    tidy_flow_registry.tidy_registry(
+        ws.registry, ws.root, backfill=args.backfill,
+        project=project, prune_stale=args.prune_stale,
+    )
 
 
 def run(argv=None):

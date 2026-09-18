@@ -1,7 +1,7 @@
 """
 tidy_flow_registry.py
 =====================
-Pflege der flow_registry.yaml. Zwei Aufraeumschritte:
+Pflege der flow_registry.yaml. Drei Aufraeumschritte:
 
   1. Dedupe: Eintraege, die auf denselben (database, code) zeigen, aber
      unter mehreren Namen stehen (z.B. 'Yttrium oxide' und
@@ -9,11 +9,24 @@ Pflege der flow_registry.yaml. Zwei Aufraeumschritte:
      bevorzugt auf den, der tatsaechlich in einer *.xlsx im Workspace
      vorkommt, sonst auf den laengsten (spezifischsten) Namen.
 
-  2. Backfill: fehlende 'unit' (Technosphere) bzw. 'unit' + 'categories'
-     (Biosphere) werden ueber bw2data aus dem Ziel-Projekt nachgetragen
-     (read-only). Ist bw2data / das Projekt nicht erreichbar, wird dieser
-     Schritt uebersprungen und die betroffenen Eintraege bleiben
-     unveraendert.
+  2. Bereinigen: Eintraege, deren 'database' im gewaehlten Projekt NICHT
+     (mehr) existiert - z.B. weil sie frueher gegen eine andere ecoinvent-
+     Version aufgeloest wurden -, werden ENTFERNT (nicht umbenannt: der
+     'code' ist pro ecoinvent-Version spezifisch, ein Umbenennen auf die
+     neue Datenbank waere daher falsch). Der entfernte Flow wird beim
+     naechsten ex2bw-check automatisch ueber den ecoinvent-Abgleich neu
+     aufgeloest (siehe matcher.py/ecoinvent_matcher.py).
+
+  3. Backfill: fehlende 'unit' (Technosphere) bzw. 'unit' + 'categories'
+     (Biosphere) werden ueber bw2data aus dem gewaehlten Projekt
+     nachgetragen (read-only).
+
+Schritt 2 und 3 brauchen ein Brightway-Projekt - das ist NICHT hardcodiert,
+sondern kommt von aussen (siehe cli.py: einmalige interaktive Abfrage,
+gleiches Muster wie beim ecoinvent-Abgleich in ecoinvent_matcher.py). Ohne
+Projekt (z.B. bw2data nicht installiert, kein Projekt gewaehlt) werden
+beide Schritte stillschweigend uebersprungen, die betroffenen Eintraege
+bleiben unveraendert.
 
 Vor dem Schreiben wird flow_registry.yaml nach
 flow_registry.yaml.bak_<YYYYMMDD_HHMMSS> gesichert.
@@ -21,7 +34,7 @@ flow_registry.yaml.bak_<YYYYMMDD_HHMMSS> gesichert.
 Fuer den normalen Gebrauch siehe den Konsolenbefehl ex2bw-tidy-registry
 (cli.py). Niedrigschwelliger Direktaufruf ohne Workspace-Konzept:
 
-    python -m excel2brightway.tidy_flow_registry --registry flow_registry.yaml --excel .
+    python -m excel2brightway.tidy_flow_registry --registry flow_registry.yaml --excel . --project MyProject
 """
 
 import argparse
@@ -32,8 +45,6 @@ from pathlib import Path
 import yaml
 
 from .matcher import normalize
-
-PROJECT_NAME = "ecoinvent-3.12-cutoff"
 
 HEADER = """\
 # ============================================================
@@ -105,19 +116,68 @@ def _dedupe_section(section_name: str, entries: dict, excel_names: set) -> dict:
     return dict(sorted(kept.items(), key=lambda kv: kv[0].lower()))
 
 
-def _backfill(registry: dict) -> int:
-    """Traegt fehlende unit/categories aus dem Brightway-Projekt nach. Gibt Anzahl Aenderungen zurueck."""
+def _try_activate_project(project_name: str):
+    """
+    Aktiviert `project_name` fuer read-only bw2data-Zugriffe (Bereinigen/
+    Backfill). Gibt das bw2data-Modul zurueck, oder None (mit Warnung),
+    wenn kein Projekt angegeben, bw2data nicht installiert oder das
+    Projekt nicht erreichbar ist - der Aufrufer ueberspringt seinen
+    Schritt dann, statt abzubrechen.
+    """
+    if not project_name:
+        print("WARNUNG: Kein Projekt gewaehlt.")
+        return None
+
     try:
         import bw2data as bd
     except ImportError:
-        print("WARNUNG: bw2data nicht installiert - Backfill uebersprungen.")
-        return 0
+        print("WARNUNG: bw2data nicht installiert.")
+        return None
 
     try:
-        if bd.projects.current != PROJECT_NAME:
-            bd.projects.set_current(PROJECT_NAME)
+        if bd.projects.current != project_name:
+            bd.projects.set_current(project_name)
     except Exception as exc:
-        print(f"WARNUNG: Projekt '{PROJECT_NAME}' nicht erreichbar ({exc}) - Backfill uebersprungen.")
+        print(f"WARNUNG: Projekt '{project_name}' nicht erreichbar ({exc}).")
+        return None
+
+    return bd
+
+
+def _prune_stale_entries(registry: dict, project_name: str) -> list:
+    """
+    Entfernt Eintraege, deren 'database' im gewaehlten Projekt NICHT
+    existiert (siehe Moduldoc: passiert z.B. nach einem ecoinvent-Versions-
+    wechsel). Der 'code' ist pro ecoinvent-Version spezifisch - ein
+    Umbenennen auf die neue Datenbank waere daher falsch, deshalb wird
+    entfernt statt umbenannt; der Flow wird beim naechsten ex2bw-check
+    frisch neu aufgeloest. Gibt eine Liste Beschreibungen der entfernten
+    Eintraege zurueck (leer = nichts entfernt/uebersprungen).
+    """
+    bd = _try_activate_project(project_name)
+    if bd is None:
+        print("  Bereinigung uebersprungen.")
+        return []
+
+    existing_databases = set(bd.databases)
+
+    removed = []
+    for section in ("technosphere", "biosphere"):
+        entries = registry.get(section) or {}
+        for name in list(entries.keys()):
+            database = (entries[name] or {}).get("database")
+            if database and database not in existing_databases:
+                removed.append(f"{section}/{name} (Datenbank '{database}' nicht in Projekt '{project_name}')")
+                del entries[name]
+
+    return removed
+
+
+def _backfill(registry: dict, project_name: str) -> int:
+    """Traegt fehlende unit/categories aus dem Brightway-Projekt nach. Gibt Anzahl Aenderungen zurueck."""
+    bd = _try_activate_project(project_name)
+    if bd is None:
+        print("  Backfill uebersprungen.")
         return 0
 
     changed = 0
@@ -152,12 +212,19 @@ def _backfill(registry: dict) -> int:
     return changed
 
 
-def tidy_registry(registry: Path, excel_dir: Path, backfill: bool = True):
+def tidy_registry(
+    registry: Path, excel_dir: Path, backfill: bool = True,
+    project: str = None, prune_stale: bool = True,
+):
     """
-    Bibliotheksfunktion hinter ex2bw-tidy-registry: dedupe + optionaler
-    unit/categories-Backfill fuer `registry`, mit `excel_dir` als Bezug
-    fuer den Dedupe-Vorrang (siehe _dedupe_section). Schreibt vorher ein
-    Backup, danach die aufgeraeumte flow_registry.yaml.
+    Bibliotheksfunktion hinter ex2bw-tidy-registry: dedupe + optionales
+    Bereinigen veralteter Eintraege + optionaler unit/categories-Backfill
+    fuer `registry`, mit `excel_dir` als Bezug fuer den Dedupe-Vorrang
+    (siehe _dedupe_section). `project`: Brightway-Projekt fuer Bereinigen/
+    Backfill (siehe Moduldoc - kommt von aussen, kein Hardcoding); ohne
+    Projekt werden beide Schritte uebersprungen, unabhaengig von
+    `prune_stale`/`backfill`. Schreibt vorher ein Backup, danach die
+    aufgeraeumte flow_registry.yaml.
     """
     raw = yaml.safe_load(registry.read_text(encoding="utf-8")) or {}
     reg = {section: dict(raw.get(section) or {}) for section in ("technosphere", "biosphere")}
@@ -175,9 +242,19 @@ def tidy_registry(registry: Path, excel_dir: Path, backfill: bool = True):
     after = {s: len(reg[s]) for s in reg}
     print(f"Nach Dedupe: {after['technosphere']} technosphere, {after['biosphere']} biosphere.")
 
-    if backfill:
+    if prune_stale and project:
+        print(f"Bereinigen (Projekt '{project}'):")
+        removed = _prune_stale_entries(reg, project)
+        if removed:
+            for item in removed:
+                print(f"  - entfernt: {item}")
+            print(f"  {len(removed)} veraltete(r) Eintrag/Eintraege entfernt (wird beim naechsten ex2bw-check neu aufgeloest).")
+        else:
+            print("  Keine veralteten Eintraege gefunden.")
+
+    if backfill and project:
         print("Backfill unit/categories aus Brightway:")
-        n = _backfill(reg)
+        n = _backfill(reg, project)
         print(f"  {n} Feld(er) nachgetragen.")
 
     backup = registry.with_name(f"{registry.name}.bak_{datetime.now():%Y%m%d_%H%M%S}")
@@ -191,14 +268,23 @@ def tidy_registry(registry: Path, excel_dir: Path, backfill: bool = True):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="flow_registry.yaml aufraeumen (Dedupe + unit-Backfill)")
+    parser = argparse.ArgumentParser(description="flow_registry.yaml aufraeumen (Dedupe + Bereinigen + unit-Backfill)")
     parser.add_argument("--registry", type=Path, default=Path("flow_registry.yaml"))
     parser.add_argument("--excel", type=Path, default=Path("."))
+    parser.add_argument(
+        "--project", default=None,
+        help="Brightway-Projekt fuer Bereinigen/Backfill; ohne Angabe werden beide uebersprungen",
+    )
     parser.add_argument("--no-backfill", dest="backfill", action="store_false",
-                        help="Nur Dedupe, kein bw2data-Zugriff")
+                        help="Kein unit/categories-Backfill aus Brightway")
+    parser.add_argument("--no-prune-stale", dest="prune_stale", action="store_false",
+                        help="Eintraege mit fehlender Datenbank im Projekt NICHT entfernen")
     args = parser.parse_args()
 
-    tidy_registry(args.registry, args.excel, backfill=args.backfill)
+    tidy_registry(
+        args.registry, args.excel, backfill=args.backfill,
+        project=args.project, prune_stale=args.prune_stale,
+    )
 
 
 if __name__ == "__main__":

@@ -18,6 +18,28 @@ def _write_registry(tmp_path, data=None):
     return path
 
 
+def test_persist_new_registry_entries_after_empty_flow_style_section(tmp_path):
+    # yaml.dump() (bzw. die REGISTRY_TEMPLATE in config.py, bzw. tidy_flow_registry.py
+    # nach dem Bereinigen einer leergewordenen Sektion) schreibt ein leeres dict als
+    # Flow-Stil ('biosphere: {}'). _persist_new_registry_entries() haengt danach per
+    # reinem Text-Append neue Eintraege an - das darf die Datei nicht kaputt machen
+    # (Regressionstest fuer genau diesen Fall).
+    registry = _write_registry(tmp_path)  # EMPTY_REGISTRY -> "technosphere: {}\nbiosphere: {}\n"
+
+    matcher._persist_new_registry_entries(registry, {
+        "biosphere": {
+            "Water": {
+                "database": "ecoinvent-3.10-biosphere", "code": "w1",
+                "categories": ["water"], "unit": "cubic meter",
+            },
+        },
+    })
+
+    reloaded = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    assert reloaded["biosphere"]["Water"]["code"] == "w1"
+    assert reloaded["technosphere"] == {}
+
+
 def test_internal_resolution_without_registry(workbook_factory, tmp_path):
     workbook_factory(
         "cluster.xlsx",

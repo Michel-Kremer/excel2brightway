@@ -72,7 +72,7 @@ cd <workspace>
 ex2bw-check              # Stufe 1: Testen & Abgleichen -> output_excel2brightway/resolved/*.yaml
 ex2bw-load                # Stufe 2: resolved/*.yaml -> Brightway (fragt vor dem Schreiben nach)
 ex2bw-run                 # interaktives Menue fuer beide Stufen
-ex2bw-tidy-registry        # flow_registry.yaml aufraeumen (Dedupe + unit-Backfill)
+ex2bw-tidy-registry        # flow_registry.yaml aufraeumen (Dedupe + Bereinigen veralteter Eintraege + unit-Backfill)
 ```
 
 Bei der eigenstaendigen, von uv verwalteten Umgebung: `uv run` voranstellen

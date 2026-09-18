@@ -316,7 +316,16 @@ def build_exchanges(
 
 
 def _append_to_section(lines: list, section_key: str, block_lines: list) -> list:
-    """Fuegt `block_lines` am Ende einer Top-Level-Sektion (z.B. 'technosphere:') ein."""
+    """
+    Fuegt `block_lines` am Ende einer Top-Level-Sektion (z.B.
+    'technosphere:') ein. Eine leere Sektion kann im Text als Flow-Stil
+    vorliegen (z.B. 'biosphere: {}' - so schreibt yaml.dump() ein leeres
+    dict, und so sieht auch die REGISTRY_TEMPLATE in config.py aus, bzw.
+    so kann tidy_flow_registry.py eine Sektion nach dem Bereinigen
+    hinterlassen). Eingerueckte Zeilen einfach darunter zu haengen waere
+    dann kein gueltiges YAML mehr (Flow-Wert + Block-Kinder auf demselben
+    Schluessel) - der Header wird daher zuerst auf Block-Stil normalisiert.
+    """
     start = None
     for i, line in enumerate(lines):
         if line.startswith(f"{section_key}:"):
@@ -324,6 +333,9 @@ def _append_to_section(lines: list, section_key: str, block_lines: list) -> list
             break
     if start is None:
         return lines + ["", f"{section_key}:"] + block_lines
+
+    if lines[start].strip() != f"{section_key}:":
+        lines = lines[:start] + [f"{section_key}:"] + lines[start + 1:]
 
     end = len(lines)
     for i in range(start + 1, len(lines)):
