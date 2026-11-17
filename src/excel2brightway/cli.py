@@ -1,295 +1,207 @@
 """
 cli.py
 ======
-Konsolenbefehle (siehe pyproject.toml [project.scripts]):
+Konsolenbefehle (siehe pyproject.toml). Fuer die normale Arbeit gibt es das
+Fenster (ex2bw-gui); die Konsole bleibt fuer Tests und Automatisierung.
 
-  ex2bw-run             interaktives Menue: [1] Testen/Abgleichen  [2] Laden in Brightway
-  ex2bw-check           Stufe 1: Testen & Abgleichen (ehem. test_and_match.py)
-  ex2bw-load            Stufe 2: Laden in Brightway (ehem. load_to_brightway.py)
-  ex2bw-tidy-registry   flow_registry.yaml aufraeumen (ehem. tidy_flow_registry.py CLI)
+  ex2bw-check   PFAD...   Tests ausfuehren, Pruefblatt + ex2bw.log schreiben
+  ex2bw-apply   DATEI...  Auswahl aus dem Pruefblatt uebernehmen
+  ex2bw-write   PFAD...   erneut pruefen und nach Brightway schreiben
+  ex2bw-migrate PFAD...   Datenbank/Version umstellen (Grundform)
+  ex2bw-gui               Fenster starten
 
-Alle nehmen optional --workspace PATH entgegen; ohne das wird die
-Umgebungsvariable EX2BW_WORKSPACE, sonst das aktuelle Arbeitsverzeichnis
-verwendet (siehe config.resolve_workspace). Verhalten (Menue-Prompts,
-"Fortfahren? [j/N]"-Sicherheitsabfrage vor dem Schreiben nach Brightway,
-verkettete Check->Load-Frage) entspricht dem der fruehreren Einzelskripte.
+PFAD = Excel-Dateien und/oder Ordner (dann alle *.xlsx darin).
 
-ex2bw-load/ex2bw-run nehmen zusaetzlich optional --project NAME entgegen
-(Ziel-Brightway-Projekt). Ohne --project wird interaktiv gefragt, Default
-ist das aktuell aktivierte bw2data-Projekt.
-
-ex2bw-check fragt (sofern der ecoinvent-Abgleich nicht per --no-ecoinvent
-deaktiviert ist und bw2data verfuegbar ist) zusaetzlich einmal nach dem
-Brightway-Projekt, das die ecoinvent-/biosphere-Datenbank fuer den Abgleich
-enthaelt (siehe ecoinvent_matcher.py - dort ist nichts hardcodiert). Wird
-danach direkt nach Brightway geladen, dient dasselbe Projekt als Default
-fuer die --project-Abfrage in ex2bw-load, es wird also nicht zweimal
-gefragt.
-
-ex2bw-tidy-registry fragt (sofern Bereinigen und/oder Backfill nicht per
---no-prune-stale/--no-backfill deaktiviert sind und bw2data verfuegbar ist)
-ebenso einmal nach dem Brightway-Projekt (siehe tidy_flow_registry.py -
-auch dort nichts hardcodiert). Damit werden veraltete flow_registry.yaml-
-Eintraege (z.B. nach einem ecoinvent-Versionswechsel) entfernt statt
-falsch umbenannt zu werden - sie werden beim naechsten ex2bw-check frisch
-neu aufgeloest.
-
-Diese Funktionen geben bewusst nichts zurueck (siehe pyproject.toml
-[project.scripts]): der generierte Konsolenbefehl ruft sie als
-`sys.exit(func())` auf - ein Rueckgabewert ausser None/int wuerde dabei
-auf stderr ausgegeben und einen Fehler-Exitcode ausloesen. Wer die
-Ergebnisse programmatisch braucht, nutzt matcher.run()/
-brightway_writer.write_to_brightway() direkt statt cli.py.
+Rueckgabewerte: 0 = alles in Ordnung, 1 = Meldungen/blockiert, 2 = Fehler.
 """
 
 import argparse
+import sys
 from pathlib import Path
 
-from . import brightway_writer
-from . import matcher
-from . import tidy_flow_registry
-from .config import resolve_workspace
+from .core.apply import DataChangedError, apply_review, summarize
+from .core.checks import CheckOptions, run_checks
+from .core.model import ALL_TESTS
+from .core.resolve import ResolveConfig
+from .core.review_sheet import WorkbookLockedError
 
 
-def _workspace_argument(parser: argparse.ArgumentParser):
+def _common(parser, tests=True):
+    parser.add_argument("paths", nargs="+", type=Path, help="Excel-Dateien und/oder Ordner")
+    parser.add_argument("--project", default=None, help="Brightway-Projekt (fuer Fluss- und Verweis-Test)")
     parser.add_argument(
-        "--workspace", type=Path, default=None,
-        help="Workspace-Wurzel (Default: $EX2BW_WORKSPACE, sonst aktuelles Arbeitsverzeichnis)",
+        "--databases", default=None,
+        help="Verknuepfungs-Datenbanken, kommagetrennt (Standard: alle Datenbanken des Projekts)",
     )
+    parser.add_argument(
+        "--locations", default="GLO,RER,RoW",
+        help="Standort-Rangfolge ohne Angabe in der Excel, kommagetrennt (Standard: GLO,RER,RoW)",
+    )
+    parser.add_argument(
+        "--format-ueberbruecken", action="store_true",
+        help="Format-Fehler blockieren nicht (Zeilen ohne Pflichtangaben werden beim Schreiben ausgelassen)",
+    )
+    if tests:
+        parser.add_argument(
+            "--tests", default=",".join(ALL_TESTS),
+            help=f"Auszufuehrende Tests, kommagetrennt (Standard: {','.join(ALL_TESTS)})",
+        )
+
+
+def _split(value):
+    return [v.strip() for v in value.split(",") if v.strip()] if value else []
+
+
+def _backend(project):
+    if not project:
+        return None
+    from .core.backend import BrightwayBackend
+
+    return BrightwayBackend(project)
+
+
+def _options(args, tests=None):
+    selected = tuple(tests or _split(getattr(args, "tests", None)) or ALL_TESTS)
+    unknown = [t for t in selected if t not in ALL_TESTS]
+    if unknown:
+        raise SystemExit(f"Unbekannte(r) Test(s): {', '.join(unknown)} (erlaubt: {', '.join(ALL_TESTS)})")
+    return CheckOptions(
+        tests=selected,
+        bypass_format=args.format_ueberbruecken,
+        resolve_config=ResolveConfig(
+            link_databases=_split(args.databases) or None,
+            location_priority=tuple(_split(args.locations)) or ("GLO", "RER", "RoW"),
+        ),
+    )
+
+
+def _print_report(report):
+    print(report.summary())
+    for issue in report.issues:
+        print(f"  [{issue.test}] {issue.severity} {issue.location_label()}: {issue.message}")
+    for error in report.errors:
+        print(f"  FEHLER: {error}")
+    if report.log_path:
+        print(f"Fehler-Log: {report.log_path}")
 
 
 def check(argv=None):
-    """Stufe 1: Testen & Abgleichen."""
-    parser = argparse.ArgumentParser(description="Stufe 1: Testen & Abgleichen")
-    _workspace_argument(parser)
-    parser.add_argument(
-        "--no-ecoinvent", dest="ecoinvent_fallback", action="store_false",
-        help="Keinen automatischen Abgleich gegen ecoinvent fuer unresolved Flows versuchen",
-    )
+    parser = argparse.ArgumentParser(description="excel2brightway: Tests ausfuehren und Pruefblatt schreiben")
+    _common(parser)
+    parser.add_argument("--kein-pruefblatt", action="store_true", help="Excel-Dateien nicht veraendern")
     args = parser.parse_args(argv)
+    options = _options(args)
+    options.write_review = not args.kein_pruefblatt
+    try:
+        report = run_checks(args.paths, backend=_backend(args.project), options=options)
+    except Exception as exc:
+        print(f"FEHLER: {exc}")
+        return 2
+    _print_report(report)
+    return 0 if report.ok else 1
 
-    ws = resolve_workspace(args.workspace)
-    ws.ensure()
 
-    # Projekt fuer den ecoinvent-Abgleich einmal vorab fragen (statt hardcodiert,
-    # siehe ecoinvent_matcher.py) - nur wenn der Abgleich ueberhaupt versucht wird
-    # und bw2data verfuegbar ist; sonst wie zuvor stillschweigend uebersprungen.
-    ecoinvent_project = None
-    if args.ecoinvent_fallback:
+def apply(argv=None):
+    parser = argparse.ArgumentParser(description="excel2brightway: Auswahl aus dem Pruefblatt uebernehmen")
+    parser.add_argument("paths", nargs="+", type=Path, help="Excel-Dateien mit Pruefblatt")
+    args = parser.parse_args(argv)
+    status = 0
+    for path in args.paths:
         try:
-            import bw2data  # noqa: F401 -- nur um Verfuegbarkeit/Erreichbarkeit zu pruefen
-        except ImportError:
-            pass
-        else:
-            try:
-                ecoinvent_project = _choose_project(
-                    prompt_label="Welches Projekt enthaelt die ecoinvent-/biosphere-Datenbank fuer den Abgleich"
-                )
-            except Exception as exc:
-                print(f"WARNUNG: Projektauswahl fuer ecoinvent-Abgleich fehlgeschlagen ({exc}), wird uebersprungen.")
-
-    parsed_activities, unresolved = matcher.run(
-        clusters=ws.root, registry=ws.registry, out=ws.unresolved,
-        ecoinvent_fallback=args.ecoinvent_fallback, resolved_dir=ws.resolved_dir,
-        warnings_out=ws.load_warnings,
-        ecoinvent_project=ecoinvent_project,
-        ecoinvent_prompt=_ecoinvent_db_prompt if ecoinvent_project else None,
-    )
-
-    if not unresolved:
-        print(f"\nAlles aufgeloest. Naechster Schritt: ex2bw-load (liest {ws.resolved_dir}).")
-        choice = input("Jetzt direkt nach Brightway laden? [j/N]: ").strip().lower()
-        if choice in ("j", "ja", "y", "yes"):
-            # Bereits gewaehltes ecoinvent-Projekt als Default fuer den Schreib-Schritt
-            # mitgeben (oft dasselbe Projekt), damit nicht zweimal gefragt wird.
-            forwarded = ["--workspace", str(ws.root)]
-            if ecoinvent_project:
-                forwarded += ["--project", ecoinvent_project]
-            load(forwarded)
+            print(summarize(apply_review(path)))
+        except (DataChangedError, WorkbookLockedError) as exc:
+            print(f"FEHLER: {exc}")
+            status = 1
+    return status
 
 
-def _project_argument(parser: argparse.ArgumentParser):
-    parser.add_argument(
-        "--project", default=None,
-        help="Ziel-Brightway-Projekt (Default: aktuell aktiviertes Projekt, interaktive Auswahl moeglich)",
-    )
+def _confirm(question):
+    return input(f"{question} [j/N]: ").strip().lower() in ("j", "ja", "y", "yes")
 
 
-def _choose_project(preselected=None, prompt_label="Welches Projekt") -> str:
-    """
-    Bestimmt ein Brightway-Projekt (Ziel zum Schreiben ODER Quelle fuer den
-    ecoinvent-Abgleich, siehe Aufrufer). preselected (z.B. aus --project)
-    wird ohne Rueckfrage uebernommen. Sonst interaktive Auswahl mit dem
-    aktuell aktivierten Projekt als Default. `prompt_label` passt den
-    Fragetext an den jeweiligen Zweck an.
-    """
-    import bw2data as bd
-
-    current = bd.projects.current
-    if preselected:
-        return preselected
-
-    available = sorted(p.name for p in bd.projects)
-    print(f"\nVerfuegbare Brightway-Projekte (aktuell aktiv: '{current}'):")
-    for i, name in enumerate(available, 1):
-        marker = "  <- aktuell aktiv" if name == current else ""
-        print(f"  [{i}] {name}{marker}")
-
-    choice = input(f"{prompt_label}? (Standard: aktuell aktiviertes '{current}'): ").strip()
-    if not choice:
-        return current
-    if choice.isdigit():
-        return available[int(choice) - 1]
-    return choice
-
-
-def _ecoinvent_db_prompt(label, candidates):
-    """
-    Rueckfrage-Callback fuer matcher.run(ecoinvent_prompt=...): wird nur
-    aufgerufen, wenn die 'database'-Spalte einer Exchange-Zeile (`label`,
-    kann None sein) nicht eindeutig einer Datenbank im zuvor gewaehlten
-    ecoinvent-Projekt zugeordnet werden konnte (siehe
-    ecoinvent_matcher._resolve_database). Wird pro Label nur einmal
-    aufgerufen (Ergebnis wird dort gecacht).
-    """
-    if label:
-        print(
-            f"\nKonnte die im Excel angegebene Datenbank '{label}' nicht eindeutig "
-            f"einer Datenbank im gewaehlten Projekt zuordnen."
-        )
-    else:
-        print(
-            "\nFuer den ecoinvent-Abgleich wird eine Datenbank im gewaehlten Projekt "
-            "benoetigt (keine 'database'-Angabe im Excel gefunden)."
-        )
-
-    if not candidates:
-        print("(Projekt enthaelt keine Datenbanken.)")
-        return None
-
-    print("Verfuegbare Datenbanken:")
-    for i, name in enumerate(candidates, 1):
-        print(f"  [{i}] {name}")
-
-    choice = input("Welche verwenden? (leer = fuer dieses Label ueberspringen): ").strip()
-    if not choice:
-        return None
-    if choice.isdigit() and 1 <= int(choice) <= len(candidates):
-        return candidates[int(choice) - 1]
-    return choice
-
-
-def load(argv=None):
-    """Stufe 2: Laden in Brightway."""
-    parser = argparse.ArgumentParser(description="Stufe 2: Laden in Brightway")
-    _workspace_argument(parser)
-    _project_argument(parser)
+def write(argv=None):
+    parser = argparse.ArgumentParser(description="excel2brightway: erneut pruefen und nach Brightway schreiben")
+    _common(parser, tests=False)
+    parser.add_argument("--loeschen-erlauben", action="store_true",
+                        help="Aktivitaeten loeschen, die in Brightway, aber in keiner Datei stehen")
+    parser.add_argument("--verweise-brechen-erlauben", action="store_true",
+                        help="auch schreiben, wenn Verweise aus anderen Datenbanken ins Leere laufen")
+    parser.add_argument("--ja", action="store_true", help="ohne Rueckfrage schreiben")
     args = parser.parse_args(argv)
+    if not args.project:
+        print("FEHLER: --project ist zum Schreiben noetig.")
+        return 2
 
-    ws = resolve_workspace(args.workspace)
+    from .core.write import WriteBlockedError, describe_plan, execute_write, plan_write
 
-    if not ws.resolved_dir.exists():
-        print(f"{ws.resolved_dir} existiert nicht - zuerst 'ex2bw-check' ausfuehren.")
-        return
-
-    files = sorted(ws.resolved_dir.glob("*.yaml"))
-    if not files:
-        print(f"Keine resolved-Dateien in {ws.resolved_dir} gefunden - zuerst 'ex2bw-check' ausfuehren.")
-        return
-
-    print("Verfuegbare resolved-Dateien:")
-    for i, path in enumerate(files, 1):
-        print(f"  [{i}] {path.name}")
-
-    choice = input("Welche laden? (Standard: alle, sonst z.B. '1,3'): ").strip()
-    if not choice:
-        selected = files
-    else:
-        indices = [int(part) for part in choice.split(",") if part.strip()]
-        selected = [files[i - 1] for i in indices]
-
-    if not selected:
-        print("Keine Auswahl, nichts zu tun.")
-        return
-
-    project_name = _choose_project(args.project)
-
-    print("\nFolgende Dateien werden nach Brightway geschrieben:")
-    for path in selected:
-        print(f"  - {path.name}")
-    print(f"Ziel-Projekt: '{project_name}'")
-
-    confirm = input("Fortfahren? [j/N]: ").strip().lower()
-    if confirm not in ("j", "ja", "y", "yes"):
+    backend = _backend(args.project)
+    report, plans = plan_write(
+        args.paths, backend, _options(args, tests=ALL_TESTS),
+        allow_broken_references=args.verweise_brechen_erlauben,
+    )
+    _print_report(report)
+    if not plans:
+        print("Nicht geschrieben - bitte zuerst die Meldungen im Pruefblatt beheben.")
+        return 1
+    for plan in plans:
+        print(describe_plan(plan))
+    if not args.ja and not _confirm(f"In Projekt '{args.project}' schreiben?"):
         print("Abgebrochen.")
-        return
+        return 1
+    try:
+        written = execute_write(
+            plans, args.project, allow_delete=args.loeschen_erlauben,
+            allow_broken_references=args.verweise_brechen_erlauben,
+        )
+    except WriteBlockedError as exc:
+        print(f"Nicht geschrieben: {exc}")
+        return 1
+    except Exception as exc:
+        print(f"FEHLER beim Schreiben: {type(exc).__name__}: {exc}")
+        return 2
+    for database, count in written:
+        print(f"{database}: {count} Aktivitaet(en) geschrieben.")
+    return 0
 
-    brightway_writer.write_to_brightway(selected, project_name=project_name)
 
-
-def tidy_registry(argv=None):
-    """flow_registry.yaml aufraeumen (Dedupe + Bereinigen + unit-Backfill)."""
-    parser = argparse.ArgumentParser(description="flow_registry.yaml aufraeumen (Dedupe + Bereinigen + unit-Backfill)")
-    _workspace_argument(parser)
-    _project_argument(parser)
-    parser.add_argument(
-        "--no-backfill", dest="backfill", action="store_false",
-        help="Kein unit/categories-Backfill aus Brightway",
-    )
-    parser.add_argument(
-        "--no-prune-stale", dest="prune_stale", action="store_false",
-        help="Eintraege mit fehlender Datenbank im gewaehlten Projekt NICHT entfernen",
-    )
+def migrate(argv=None):
+    parser = argparse.ArgumentParser(description="excel2brightway: Datenbank/Version umstellen (Grundform)")
+    _common(parser, tests=False)
+    parser.add_argument("--source", required=True, help="Quell-Datenbank, z.B. ecoinvent-3.10-cutoff")
+    parser.add_argument("--target", required=True, help="Ziel-Datenbank, z.B. ecoinvent-3.12-cutoff")
+    parser.add_argument("--target-project", default=None, help="Projekt der Ziel-Datenbank (Standard: --project)")
+    parser.add_argument("--source-biosphere", default=None)
+    parser.add_argument("--target-biosphere", default=None)
     args = parser.parse_args(argv)
+    if not args.project:
+        print("FEHLER: --project ist noetig.")
+        return 2
+    from .core.migrate import MigrationBlockedError, migrate_files
 
-    ws = resolve_workspace(args.workspace)
-    ws.ensure()
-
-    # Projekt fuer Bereinigen/Backfill einmal vorab fragen (statt hardcodiert,
-    # siehe tidy_flow_registry.py) - nur wenn ueberhaupt einer der beiden
-    # Schritte laufen soll und bw2data verfuegbar ist; sonst wie zuvor
-    # stillschweigend uebersprungen.
-    project = None
-    if args.backfill or args.prune_stale:
-        try:
-            import bw2data  # noqa: F401 -- nur um Verfuegbarkeit/Erreichbarkeit zu pruefen
-        except ImportError:
-            pass
-        else:
-            try:
-                project = _choose_project(
-                    args.project, prompt_label="Welches Projekt fuer Bereinigen/Backfill verwenden"
-                )
-            except Exception as exc:
-                print(f"WARNUNG: Projektauswahl fehlgeschlagen ({exc}), Bereinigen/Backfill werden uebersprungen.")
-
-    tidy_flow_registry.tidy_registry(
-        ws.registry, ws.root, backfill=args.backfill,
-        project=project, prune_stale=args.prune_stale,
-    )
+    source_backend = _backend(args.project)
+    target_backend = _backend(args.target_project) if args.target_project else source_backend
+    try:
+        result = migrate_files(
+            args.paths, source_backend, args.source, target_backend, args.target,
+            source_biosphere=args.source_biosphere, target_biosphere=args.target_biosphere,
+            options=_options(args, tests=ALL_TESTS),
+        )
+    except MigrationBlockedError as exc:
+        print(f"Nicht umgestellt: {exc}")
+        return 1
+    print(result.summary())
+    for path in result.files:
+        print(f"  neue Datei: {path}")
+    if result.report is not None:
+        _print_report(result.report)
+    return 0 if result.report is None or result.report.ok else 1
 
 
-def run(argv=None):
-    """Interaktives Menue: [1] Testen/Abgleichen  [2] Laden in Brightway."""
-    parser = argparse.ArgumentParser(description="Menue: [1] Testen/Abgleichen  [2] Laden in Brightway")
-    _workspace_argument(parser)
-    _project_argument(parser)
-    args = parser.parse_args(argv)
+def gui(argv=None):
+    from .gui import main
 
-    forwarded = ["--workspace", str(args.workspace)] if args.workspace else []
-    forwarded_load = forwarded + (["--project", args.project] if args.project else [])
-
-    choice = input("Was moechtest du tun? [1] Testen/Abgleichen  [2] Laden in Brightway (Standard: 1): ").strip()
-
-    if choice in ("", "1"):
-        check(forwarded)
-        return
-    if choice == "2":
-        load(forwarded_load)
-        return
-
-    raise ValueError(f"Unbekannte Auswahl: '{choice}' (erwartet '1' oder '2')")
+    return main()
 
 
-if __name__ == "__main__":
-    run()
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(check())

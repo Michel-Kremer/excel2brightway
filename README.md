@@ -1,89 +1,194 @@
 # excel2brightway
 
-Prueft LCI-/ecoinvent-Excel-Daten im nativen Brightway2-Excel-Format
-(`bw2io.ExcelImporter`) auf Korrektheit - Flow-Aufloesung (intern /
-`flow_registry.yaml` / ecoinvent, read-only) und Excel-Format - und schreibt
-sie bei vollstaendiger Aufloesung in eine Brightway database, inklusive der definierten Parametern und
+Prueft von Hand erstellte LCI-Excel-Dateien im nativen Brightway-Excel-Format
+(wie `bw2io.ExcelImporter`), hilft beim Korrigieren direkt in der Excel und
+schreibt sie danach in eine Brightway-Datenbank - inklusive Parametern und
 Formeln.
+
+**Die Excel-Dateien sind der einzige Stand.** Es gibt keine Registry und keine
+Zwischendateien: Vor dem Schreiben wird alles erneut geprueft.
 
 ## Installation
 
 Dieses Projekt nutzt [uv](https://docs.astral.sh/uv/) fuer die
 Paketverwaltung. `pyproject.toml` legt die kompatiblen Versionsbereiche fest,
-`uv.lock` die daraus konkret aufgeloesten, reproduzierbaren Versionen
-(inklusive `bw2data`).
-
-Eigenstaendige, von uv verwaltete Umgebung (Standardfall):
+`uv.lock` die konkret aufgeloesten Versionen (inklusive `bw2data`).
 
 ```
 cd <pfad-zum-projekt>
 uv sync
-uv run ex2bw-check
+uv run ex2bw-gui
 ```
 
-`uv sync` legt bei Bedarf eine `.venv` im Projektverzeichnis an und
-installiert exakt die in `uv.lock` festgehaltenen Versionen.
-
-Installation in eine bereits bestehende Ziel-Umgebung (z. B. eine, die schon
-die zum Ziel-Brightway-Projekt passende `bw2data`-Version enthaelt):
+Installation in eine bestehende Umgebung (z. B. die mit der zum
+Brightway-Projekt passenden `bw2data`-Version), auch ohne Admin-Rechte:
 
 ```
 uv pip install --python <pfad-zur-ziel-umgebung>/python.exe -e .
 ```
 
 `bw2data` MUSS in derselben Major-Version installiert sein, die auch das
-Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 4.x, siehe
-`pyproject.toml`) - eine andere Major-Version loest beim ersten
-Projektzugriff eine automatische, irreversible Migration am geteilten
-Brightway-Projektordner aus.
+Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 4.x) - eine andere
+Major-Version loest beim ersten Projektzugriff eine automatische, irreversible
+Migration des geteilten Brightway-Projektordners aus.
 
-Die editierbare Installation verankert den Paketpfad als absoluten Pfad in
-der Umgebung. Wird `<pfad-zum-projekt>` spaeter verschoben oder umbenannt,
-bricht die Installation und muss von `<pfad-zum-projekt>` aus erneut
-durchgefuehrt werden.
-
-## Workspace
-
-`excel2brightway` operiert auf einem **Workspace**-Ordner, der getrennt vom
-Package-Code liegt:
+## Bedienung: das Fenster
 
 ```
-<workspace>/
-  *.xlsx                     Eingabe: LCI-Cluster-Excel-Dateien (von Hand gepflegt)
-  output_excel2brightway/    Ausgabe: alles, was excel2brightway selbst schreibt
-    flow_registry.yaml
-    unresolved.yaml
-    load_warnings.yaml       Warnungen beim Einlesen (fehlende Pflichtfelder,
-                              unbekannter Exchange-Typ, fehlende amount/name, ...)
-    resolved/
+ex2bw-gui
 ```
 
-Workspace-Aufloesung, in dieser Reihenfolge: `--workspace PATH` > Umgebungs-
-variable `EX2BW_WORKSPACE` > aktuelles Arbeitsverzeichnis.
+Unter Windows legt die Installation dafuer eine `ex2bw-gui.exe` ohne
+Konsolenfenster an (`[project.gui-scripts]`), die sich auch als Verknuepfung
+auf den Desktop legen laesst.
 
-## Nutzung
+1. **Datei(en) oder Ordner** waehlen. Bei einem Ordner werden alle `*.xlsx`
+   darin geprueft.
+2. **Projekt** waehlen und optional die **Verknuepfungs-Datenbanken**
+   markieren (keine Auswahl = alle Datenbanken des Projekts). Dort wird
+   gesucht, wenn eine exchange-Zeile keine `database` angibt.
+3. **Tests** waehlen (einzeln oder zusammen) und **Pruefen**. Die erste Datei
+   mit Meldungen oeffnet sich in Excel.
+4. Im Blatt **`_ex2bw_Pruefung`** je Fluss einen Kandidaten unter **Auswahl**
+   waehlen - oder unter **Eigene Suche** einen Suchbegriff eintragen und erneut
+   pruefen. Datei speichern und schliessen.
+5. **Auswahl uebernehmen**: die Auswahl wird in die exchange-Zeilen
+   geschrieben, danach wird automatisch erneut geprueft.
+6. Ist alles gruen: **Nach Brightway schreiben** oder **Datenbank/Version
+   umstellen**.
 
-In der Umgebung, in der `excel2brightway` installiert ist (siehe
-Installation):
+## Die Tests
+
+| Test | prueft | Schweregrade |
+|---|---|---|
+| **Format** | Brightway-Excel-Format: Pflichtfelder und -spalten, gueltige `type`/`amount`, doppelte `code`s, eine production-Zeile, cutoff verdeckt Spalten | ueberbrueckbar: Fehler auf Zeilenebene blockieren dann nicht, solche Zeilen werden beim Schreiben ausgelassen und gemeldet. Strukturfehler (Datei unlesbar, keine/zwei `Database`-Zeilen, Aktivitaet ohne Name oder `unit`, doppelte `code`s, mehrere production-Zeilen) blockieren immer |
+| **Fluss** | jede technosphere-/biosphere-Zeile laesst sich genau einem Datensatz zuordnen | nicht ueberbrueckbar |
+| **Verweis** | was das Schreiben in Brightway loeschen wuerde und ob andere Datenbanken darauf zeigen | Loeschen und gebrochene Verweise nur nach ausdruecklicher Bestaetigung |
+
+Was Pflicht und was optional ist, steht in `core/format_check.py`
+(`FORMAT_SCHEMA`).
+
+### Wo ein Fluss gesucht wird
+
+Die Spalte `database` der exchange-Zeile hat Vorrang:
+
+* nennt sie eine Datenbank, die in den Dateien des Ordners definiert ist ->
+  erst diese Dateien, dann eine gleichnamige Datenbank im Projekt (die Datei
+  geht vor);
+* nennt sie eine andere Datenbank (z. B. `SOEC_Process` oder `ecoinvent 3.10`,
+  normalisiert verglichen) -> nur dort;
+* ist sie leer -> erst alle Dateien des Ordners, dann die
+  Verknuepfungs-Datenbanken; biosphere: die biosphere-Datenbank(en).
+
+### Wann ein Treffer eindeutig ist
+
+* Abgleich ueber `reference product` (und `name`, falls beide angegeben),
+  sonst ueber `name`.
+* Ist `location` angegeben, muss sie passen. Ohne `location` gilt die
+  Standort-Rangfolge (Standard GLO, RER, RoW); greift sie nicht, ist der Fluss
+  **mehrdeutig** - es wird nicht geraten.
+* Treffer in mehreren Datenbanken sind immer mehrdeutig.
+* Mehrere Datensaetze am selben Standort: ein eindeutiger Markt
+  (`market for ...`) wird genommen, sonst mehrdeutig.
+* biosphere: `categories` (z. B. `air::urban air close to ground`) bzw. ein
+  Suffix wie `(air)`; ohne Unterkategorie die unspezifische Kategorie.
+* Die Einheit muss passen (`kg` = `kilogram` usw.).
+
+Fuer alles, was nicht eindeutig ist, werden bis zu 5 Kandidaten
+vorgeschlagen: Wortaehnlichkeit gegen `reference product` und `name`
+(tippfehlertolerant), Einheit, Standort, Bonus fuer Maerkte (`core/search.py`,
+Gewichte in `WEIGHTS`).
+
+## Was in die Excel-Datei geschrieben wird
+
+| Blatt | Inhalt |
+|---|---|
+| `_ex2bw_Pruefung` | eine Zeile je Meldung, mit Link zur Zelle, Auswahlliste, Eigener Suche, Aktion (`ersetzen`/`Proxy`), Kommentar |
+| `_ex2bw_Kandidaten` | ausgeblendet: Kandidaten hinter den Auswahllisten, Pruefsumme der Daten |
+| `_ex2bw_Aenderungen` | Protokoll jeder Uebernahme (alt -> neu) |
+| `_ex2bw_Migration` | Protokoll einer Umstellung (nur in umgestellten Dateien) |
+
+Alle diese Blaetter haben `skip` in A1 und werden von Brightway nie gelesen.
+Betroffene Zellen werden rot markiert und kommentiert; die Markierungen
+verschwinden beim naechsten Pruefen bzw. Uebernehmen.
+
+Beim Uebernehmen gilt:
+
+* Die Einheit wird nie geaendert. Passt sie nicht zum Kandidaten, wird die
+  Zeile nicht uebernommen (Menge bitte von Hand umrechnen).
+* Fehlende Spalten (`database`, `location`, `reference product`, `comment`)
+  werden hinten an die Exchanges-Tabelle angefuegt.
+* Haben sich die Daten seit dem Pruefen geaendert, wird abgebrochen.
+* Vorher wird eine Sicherung in `ex2bw_sicherung/` abgelegt.
+* Ist die Datei in Excel geoeffnet, kommt die Meldung "Bitte Datei in Excel
+  schliessen".
+
+Alles, was nicht in die Excel gehoert (gesperrte Dateien, Ausnahmen, ...)
+steht zusammen mit allen Meldungen in **`ex2bw.log`** im Ordner.
+
+## Schreiben nach Brightway
+
+* Eine Datenbank wird aus **allen** Dateien des Ordners gebildet, die sie
+  definieren - auch aus nicht ausgewaehlten (sie werden automatisch
+  mitgenommen und gemeldet).
+* Die Datenbank in Brightway wird durch diesen Stand ersetzt. Aktivitaeten,
+  die in Brightway stehen, aber in keiner Datei mehr, werden nur nach
+  Bestaetigung geloescht; zeigen andere Datenbanken darauf, ist eine weitere
+  Bestaetigung noetig.
+* Der `code` einer Aktivitaet kommt aus der Excel (ohne `code`: der Name).
+  Wer eine Aktivitaet ohne `code` umbenennt, aendert damit ihren `code` -
+  der Verweis-Test zeigt, ob andere Datenbanken betroffen sind.
+
+## Datenbank/Version umstellen (Grundform)
+
+Voraussetzung: alle Tests gegen die Quelle sind gruen. Je Fluss der
+Quell-Datenbank wird im Ziel exakt derselbe Datensatz gesucht (reference
+product, name, location bzw. name und categories). Eindeutige Treffer werden
+umgestellt, alles andere landet im Pruefblatt. Die neuen Dateien liegen in
+einem Unterordner mit dem Namen der Ziel-Datenbank; die Originale bleiben
+unveraendert.
+
+## Konsole
+
+Fuer Tests und Automatisierung (Rueckgabe: 0 = in Ordnung, 1 = Meldungen,
+2 = Fehler):
 
 ```
-conda activate <env-name>
-cd <workspace>
-ex2bw-check              # Stufe 1: Testen & Abgleichen -> output_excel2brightway/resolved/*.yaml
-ex2bw-load                # Stufe 2: resolved/*.yaml -> Brightway (fragt vor dem Schreiben nach)
-ex2bw-run                 # interaktives Menue fuer beide Stufen
-ex2bw-tidy-registry        # flow_registry.yaml aufraeumen (Dedupe + Bereinigen veralteter Eintraege + unit-Backfill)
+ex2bw-check   PFAD... [--project P] [--databases a,b] [--tests format,fluss,verweis] [--format-ueberbruecken]
+ex2bw-apply   DATEI...
+ex2bw-write   PFAD... --project P [--loeschen-erlauben] [--verweise-brechen-erlauben] [--ja]
+ex2bw-migrate PFAD... --project P --source DB --target DB [--target-project P2] [--source-biosphere B --target-biosphere B2]
 ```
 
-Bei der eigenstaendigen, von uv verwalteten Umgebung: `uv run` voranstellen
-(z. B. `uv run ex2bw-check`) und aus dem Projektverzeichnis heraus mit
-`--workspace <workspace>` aufrufen.
+## Aufbau
 
-Jeder Befehl akzeptiert `--workspace PATH`, um nicht aus dem Workspace heraus
-aufgerufen zu werden.
+```
+src/excel2brightway/
+  core/
+    workbook.py       Excel-Leser mit Zellpositionen (fuer Pruefen UND Schreiben)
+    format_check.py   Format-Test, FORMAT_SCHEMA
+    backend.py        Zugriff auf Brightway (BrightwayBackend) bzw. MemoryBackend fuer Tests
+    search.py         Kandidatensuche und Re-Ranking
+    resolve.py        Fluss-Test
+    references.py     Verweis-Test
+    checks.py         Tests ausfuehren, Pruefblatt + ex2bw.log schreiben
+    review_sheet.py   Pruefblatt lesen/schreiben
+    apply.py          Auswahl uebernehmen
+    write.py          Schreiben planen und ausfuehren
+    migrate.py        Datenbank/Version umstellen
+    settings.py       zuletzt verwendete Einstellungen des Fensters
+  brightway_writer.py Schreiben ueber bw2io/bw2data
+  gui.py              Fenster (tkinter)
+  cli.py              Konsolenbefehle
+```
 
-`ex2bw-load`/`ex2bw-run` akzeptieren zusaetzlich `--project NAME` fuer das
-Ziel-Brightway-Projekt. Ohne `--project` wird vor dem Schreiben interaktiv
-aus den vorhandenen bw2data-Projekten gewaehlt (Default: das aktuell
-aktivierte Projekt). Am Ende des Schreibvorgangs wird das tatsaechlich
-verwendete Projekt in der Konsole ausgegeben.
+Tests: `uv run pytest` (laufen ohne Brightway, mit `MemoryBackend`).
+
+## Geplant
+
+* Standarddatei, die Pflicht/optional und Metadaten beschreibt und
+  `FORMAT_SCHEMA` ersetzt.
+* Migrationspakete (randonneur/randonneur_data) beim Umstellen anwenden;
+  eigenes Mapping fuer GaBi ueber das randonneur-Excel-Template.
+* Testsatz aus echten Fehlfaellen, um die Gewichte der Kandidatensuche zu
+  kalibrieren.

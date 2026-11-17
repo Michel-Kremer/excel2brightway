@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "excel2brightway"
-version = "0.1.0"
-description = "Prueft LCI-/ecoinvent-Excel-Daten auf Korrektheit und schreibt sie nach Brightway."
+version = "0.2.0"
+description = "Prueft LCI-Excel-Dateien (Brightway-Format) gegen eigene Datenbanken und ecoinvent, hilft beim Korrigieren in Excel und schreibt sie nach Brightway."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,10 +19,19 @@ dependencies = [
 test = ["pytest>=8"]
 
 [project.scripts]
-ex2bw-run = "excel2brightway.cli:run"
 ex2bw-check = "excel2brightway.cli:check"
-ex2bw-load = "excel2brightway.cli:load"
-ex2bw-tidy-registry = "excel2brightway.cli:tidy_registry"
+ex2bw-apply = "excel2brightway.cli:apply"
+ex2bw-write = "excel2brightway.cli:write"
+ex2bw-migrate = "excel2brightway.cli:migrate"
+
+# Fenster ohne Konsolenfenster (unter Windows wird eine .exe angelegt)
+[project.gui-scripts]
+ex2bw-gui = "excel2brightway.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::UserWarning:openpyxl"]
