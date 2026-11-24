@@ -131,6 +131,15 @@ steht zusammen mit allen Meldungen in **`ex2bw.log`** im Ordner.
 * Eine Datenbank wird aus **allen** Dateien des Ordners gebildet, die sie
   definieren - auch aus nicht ausgewaehlten (sie werden automatisch
   mitgenommen und gemeldet).
+* **Fassungen derselben Datei** (gleicher Name, Endung `_v0.1`, `_v0.3`, ...;
+  Varianten wie `..._final.xlsx` oder `... - Kopie.xlsx`) zaehlen nicht als
+  weitere Dateien - es zaehlt genau eine:
+  * Einzelauswahl: die ausgewaehlte Datei. Andere Versionen -> HINWEIS,
+    Varianten ohne Versionsnummer -> WARNUNG; beide werden ignoriert.
+  * Ordner oder Mehrfachauswahl: die neueste Version. Ist das nicht
+    eindeutig (Variante ohne Versionsnummer, gleiche Nummer), blockiert ein
+    FEHLER das Schreiben - dann nur eine Fassung auswaehlen oder die anderen
+    verschieben.
 * Die Datenbank in Brightway wird durch diesen Stand ersetzt. Aktivitaeten,
   die in Brightway stehen, aber in keiner Datei mehr, werden nur nach
   Bestaetigung geloescht; zeigen andere Datenbanken darauf, ist eine weitere

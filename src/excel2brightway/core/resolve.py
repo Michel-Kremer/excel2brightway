@@ -46,6 +46,10 @@ STATUS_LABELS = {
     "einheit_abweichend": "Einheit passt nicht",
     "datenbank_unbekannt": "Datenbank unbekannt",
     "kein_projekt": "kein Projekt gewaehlt",
+    # Fassungen derselben Datei (versions.py)
+    "andere_version": "andere Version",
+    "variante_ohne_version": "Variante ohne Versionsnummer",
+    "version_unklar": "Fassung unklar",
 }
 
 

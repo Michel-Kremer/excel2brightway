@@ -23,6 +23,7 @@ from tkinter.scrolledtext import ScrolledText
 from .core.apply import DataChangedError, apply_review, summarize
 from .core.backend import list_projects
 from .core.checks import CheckOptions, expand_selection, run_checks
+from .core.importer import ImportProblem
 from .core.model import FEHLER, HINWEIS, TEST_FLUSS, TEST_FORMAT, TEST_VERWEIS, WARNUNG
 from .core.resolve import ResolveConfig
 from .core.review_sheet import WorkbookLockedError
@@ -53,7 +54,7 @@ class App(tk.Tk):
         self.minsize(760, 560)
         self.settings = Settings.load()
         self.queue = queue.Queue()
-        self.busy = False
+        self._is_busy = False
         self.backends = {}
         self.last_report = None
         self.last_report_paths = None
@@ -97,7 +98,11 @@ class App(tk.Tk):
         db_frame.grid(row=2, column=1, columnspan=2, sticky="ew", **pad)
         self.db_list = tk.Listbox(db_frame, selectmode="multiple", height=5, exportselection=False)
         self.db_list.pack(side="left", fill="x", expand=True)
-        ttk.Label(db_frame, text="keine Auswahl =\nalle Datenbanken\ndes Projekts", foreground="gray").pack(side="left", padx=6)
+        db_side = ttk.Frame(db_frame)
+        db_side.pack(side="left", padx=6, fill="y")
+        ttk.Label(db_side, text="keine Auswahl =\nalle Datenbanken\ndes Projekts", foreground="gray").pack(anchor="w")
+        self.import_button = ttk.Button(db_side, text="Datenbank importieren ...", command=self._import_dialog)
+        self.import_button.pack(anchor="w", pady=(6, 0))
 
         ttk.Label(frame, text="Standort-Rangfolge:").grid(row=3, column=0, sticky="w", **pad)
         ttk.Entry(frame, textvariable=self.locations_var).grid(row=3, column=1, sticky="ew", **pad)
@@ -158,7 +163,7 @@ class App(tk.Tk):
     def _selected_databases(self):
         return [self.db_list.get(i) for i in self.db_list.curselection()]
 
-    def _options(self, tests=None):
+    def _check_options(self, tests=None):
         selected = tests or tuple(t for t, var in self.test_vars.items() if var.get())
         locations = tuple(x.strip() for x in self.locations_var.get().split(",") if x.strip())
         return CheckOptions(
@@ -201,12 +206,13 @@ class App(tk.Tk):
         )
 
     def _update_buttons(self):
-        busy = self.busy
+        busy = self._is_busy
         state = lambda enabled: "normal" if enabled and not busy else "disabled"  # noqa: E731
         mode = self.mode_var.get()
         self.check_button.configure(state=state(mode == MODE_CHECK))
         self.apply_button.configure(state=state(mode == MODE_CHECK))
         self.open_button.configure(state=state(True))
+        self.import_button.configure(state=state(True))
         self.write_button.configure(state=state(mode == MODE_WRITE and self._ready_to_write()))
         self.migrate_button.configure(state=state(mode == MODE_MIGRATE and self._ready_to_write()))
 
@@ -231,9 +237,9 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------- Threading
     def _run(self, label, work, done=None):
-        if self.busy:
+        if self._is_busy:
             return
-        self.busy = True
+        self._is_busy = True
         self._update_buttons()
         self._log(f"--- {label} ...")
         self.configure(cursor="watch")
@@ -251,7 +257,10 @@ class App(tk.Tk):
         try:
             while True:
                 kind, callback, payload = self.queue.get_nowait()
-                self.busy = False
+                if kind == "log":  # Zwischenmeldung aus dem Arbeits-Thread
+                    self._log(payload)
+                    continue
+                self._is_busy = False
                 self.configure(cursor="")
                 if kind == "done":
                     if callback is not None:
@@ -259,7 +268,7 @@ class App(tk.Tk):
                 elif kind == "error":
                     exc, trace = payload
                     self._log(trace)
-                    if isinstance(exc, (WorkbookLockedError, DataChangedError)):
+                    if isinstance(exc, (WorkbookLockedError, DataChangedError, ImportProblem)):
                         messagebox.showwarning("excel2brightway", str(exc))
                     else:
                         messagebox.showerror("excel2brightway", f"{callback} fehlgeschlagen:\n{exc}")
@@ -319,7 +328,7 @@ class App(tk.Tk):
         if not paths:
             messagebox.showinfo("excel2brightway", "Bitte zuerst Datei(en) oder einen Ordner waehlen.")
             return
-        options = self._options()
+        options = self._check_options()
         if not options.tests:
             messagebox.showinfo("excel2brightway", "Bitte mindestens einen Test waehlen.")
             return
@@ -379,7 +388,7 @@ class App(tk.Tk):
 
         paths = self._paths()
         project = self.project_var.get()
-        options = self._options()
+        options = self._check_options()
 
         def plan():
             return plan_write(paths, self._backend(project), options, allow_broken_references=True)
@@ -430,6 +439,13 @@ class App(tk.Tk):
 
     def _migrate_dialog(self):
         MigrateDialog(self)
+
+    def _import_dialog(self):
+        ImportDialog(self)
+
+    def _thread_log(self, text):
+        """_log fuer Arbeits-Threads (tkinter darf nur im Haupt-Thread angefasst werden)."""
+        self.queue.put(("log", None, str(text)))
 
     def _close(self):
         self._save_settings()
@@ -499,7 +515,7 @@ class MigrateDialog(tk.Toplevel):
 
         app = self.app
         paths = app._paths()
-        options = app._options()
+        options = app._check_options()
         source, target = self.source_var.get(), self.target_var.get()
         source_bio, target_bio = self.source_bio_var.get() or None, self.target_bio_var.get() or None
         target_project = self.target_project_var.get()
@@ -531,7 +547,137 @@ class MigrateDialog(tk.Toplevel):
         app._run("Umstellen", work, done)
 
 
+class ImportDialog(tk.Toplevel):
+    """Dialog 'Datenbank importieren': ecoinvent-Archiv (.7z/.zip) oder Ordner in ein Projekt einlesen."""
+
+    def __init__(self, app: App):
+        super().__init__(app)
+        self.app = app
+        self.title("Datenbank importieren")
+        self.transient(app)
+        self.source_var = tk.StringVar()
+        self.project_choice_var = tk.StringVar(value=app.project_var.get())
+        self.database_var = tk.StringVar()
+        self.biosphere_var = tk.StringVar()
+        self.version = None
+
+        frame = ttk.Frame(self, padding=10)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Quelle:").grid(row=0, column=0, sticky="w", padx=4, pady=3)
+        ttk.Entry(frame, textvariable=self.source_var, width=50).grid(row=0, column=1, sticky="ew", padx=4, pady=3)
+        source_buttons = ttk.Frame(frame)
+        source_buttons.grid(row=0, column=2, sticky="e")
+        ttk.Button(source_buttons, text="Archiv ...", command=self._choose_archive).pack(side="left", padx=2)
+        ttk.Button(source_buttons, text="Ordner ...", command=self._choose_folder).pack(side="left", padx=2)
+
+        ttk.Label(frame, text="Projekt:").grid(row=1, column=0, sticky="w", padx=4, pady=3)
+        project_box = ttk.Combobox(frame, textvariable=self.project_choice_var, values=app.project_box.cget("values"))
+        project_box.grid(row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=3)
+        project_box.bind("<<ComboboxSelected>>", lambda e: self._load_biospheres())
+        project_box.bind("<FocusOut>", lambda e: self._load_biospheres())
+
+        ttk.Label(frame, text="Datenbankname:").grid(row=2, column=0, sticky="w", padx=4, pady=3)
+        ttk.Entry(frame, textvariable=self.database_var).grid(row=2, column=1, columnspan=2, sticky="ew", padx=4, pady=3)
+
+        ttk.Label(frame, text="Biosphere:").grid(row=3, column=0, sticky="w", padx=4, pady=3)
+        self.biosphere_box = ttk.Combobox(frame, textvariable=self.biosphere_var)
+        self.biosphere_box.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=3)
+
+        ttk.Label(frame, foreground="gray", wraplength=480, text=(
+            "Projekt: vorhandenes waehlen oder neuen Namen eintippen (wird angelegt). Biosphere: eine vorhandene "
+            "Datenbank wird verwendet, ein neuer Name wird aus MasterData des Archivs angelegt. Archive werden "
+            "neben der Archivdatei entpackt. Der Import dauert je nach Datenbank 20-60 Minuten; bei ungelinkten "
+            "Exchanges wird nichts geschrieben."
+        )).grid(row=4, column=0, columnspan=3, sticky="w", pady=6)
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=0, columnspan=3, sticky="e")
+        ttk.Button(buttons, text="Abbrechen", command=self.destroy).pack(side="right", padx=2)
+        ttk.Button(buttons, text="Importieren", command=self._run).pack(side="right", padx=2)
+        self._load_biospheres()
+
+    def _set_source(self, path):
+        from .core.importer import suggest_names
+
+        self.source_var.set(path)
+        database, biosphere, self.version = suggest_names(path)
+        self.database_var.set(database)
+        existing = list(self.biosphere_box.cget("values"))
+        if not self.biosphere_var.get() or self.biosphere_var.get() not in existing:
+            self.biosphere_var.set(biosphere)
+
+    def _choose_archive(self):
+        path = filedialog.askopenfilename(
+            parent=self, filetypes=[("ecoinvent-Archiv", "*.7z *.zip"), ("Alle Dateien", "*.*")],
+        )
+        if path:
+            self._set_source(path)
+
+    def _choose_folder(self):
+        path = filedialog.askdirectory(parent=self)
+        if path:
+            self._set_source(path)
+
+    def _load_biospheres(self):
+        from .core.backend import is_biosphere_like
+
+        project = self.project_choice_var.get().strip()
+        if project not in self.app.project_box.cget("values"):
+            self.biosphere_box.configure(values=[])
+            return
+        try:
+            databases = self.app._backend(project).databases()
+        except Exception as exc:
+            messagebox.showerror("excel2brightway", f"Projekt '{project}' nicht lesbar:\n{exc}", parent=self)
+            return
+        self.biosphere_box.configure(values=[d for d in databases if is_biosphere_like(d)])
+
+    def _run(self):
+        from .core.importer import import_ecospold
+
+        source =self.source_var.get().strip()
+        project = self.project_choice_var.get().strip()
+        database = self.database_var.get().strip()
+        biosphere = self.biosphere_var.get().strip()
+        if not (source and project and database and biosphere):
+            messagebox.showinfo("excel2brightway", "Bitte Quelle, Projekt, Datenbankname und Biosphere angeben.", parent=self)
+            return
+        is_new_project = project not in self.app.project_box.cget("values")
+        question = (
+            f"'{Path(source).name}' als Datenbank '{database}' in "
+            f"{'das NEUE ' if is_new_project else ''}Projekt '{project}' importieren?\n"
+            f"Biosphere: '{biosphere}'\n\nDas kann 20-60 Minuten dauern."
+        )
+        if not messagebox.askyesno("Datenbank importieren", question, parent=self):
+            return
+        app, version = self.app, self.version
+        self.destroy()
+
+        def work():
+            return import_ecospold(source, project, database, biosphere, version=version, log=app._thread_log)
+
+        def done(result):
+            app._log(result.summary())
+            app.backends.pop(project, None)
+            app.project_var.set(project)
+            app._refresh_projects()
+            messagebox.showinfo("excel2brightway", result.summary())
+
+        app._run("Datenbank importieren", work, done)
+
+
+def ensure_std_streams():
+    """Ohne Konsole (ex2bw-gui.exe / pythonw) sind sys.stdout und sys.stderr None.
+    bw2data richtet beim Import einen structlog-Logger auf sys.stdout ein und
+    stuerzt dann ab - deshalb fehlende Kanaele auf os.devnull umleiten."""
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115 - bleibt offen
+
+
 def main():
+    ensure_std_streams()
     app = App()
     app.mainloop()
     return 0

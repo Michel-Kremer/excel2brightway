@@ -31,6 +31,7 @@ from .model import ALL_TESTS, FEHLER, HINWEIS, TEST_FLUSS, TEST_FORMAT, TEST_LAB
 from .references import check_references
 from .resolve import ResolveConfig, Resolver, resolution_issue
 from .review_sheet import WorkbookLockedError, read_review, strip_review, write_review
+from .versions import resolve_versions
 from .workbook import list_excel_files, read_workbook
 
 LOG_FILENAME = "ex2bw.log"
@@ -57,6 +58,7 @@ class CheckReport:
     options: CheckOptions
     errors: list = field(default_factory=list)  # sonstige Fehler (Text)
     log_path: Path = None
+    ignored: dict = field(default_factory=dict)  # Pfad -> gezaehlte Fassung (versions.py)
 
     def counts(self) -> dict:
         result = {FEHLER: 0, WARNUNG: 0, HINWEIS: 0}
@@ -152,6 +154,16 @@ def run_checks(paths, backend=None, options: CheckOptions = None) -> CheckReport
 
     for path in context_files(selected):
         report.models[path] = read_workbook(path)
+
+    # Mehrere Fassungen derselben Datei: nur eine zaehlt (versions.py)
+    given = [Path(p) for p in paths]
+    single_selection = len(given) == 1 and not given[0].is_dir()
+    version_issues, report.ignored = resolve_versions(list(report.models.values()), selected, single_selection)
+    report.issues.extend(version_issues)
+    for path in report.ignored:
+        report.models.pop(path, None)
+    selected = report.selected = [p for p in selected if p not in report.ignored]
+
     selected_models = [report.models[p] for p in selected if p in report.models]
     all_models = list(report.models.values())
 
