@@ -21,6 +21,8 @@ das Zielprojekt zuletzt geschrieben hat (siehe uv.lock/pyproject.toml).
 
 import re
 
+from .core.backend import require_bw2data
+
 _VERSIONED_DB_RE = re.compile(r"(?i)^(?P<family>[a-z]+)[-_ ]?(?P<version>\d+(?:[.\-_]\d+)*)")
 
 
@@ -83,6 +85,7 @@ def _resolve_project(project_name=None):
     stillschweigend tun) und dorthin gewechselt.
     Gibt (bw2data-Modul, tatsaechlich aktiver Projektname) zurueck.
     """
+    require_bw2data()
     import bw2data as bd
 
     if project_name is None:
@@ -110,6 +113,7 @@ def write_database(project, database, activities, project_parameters=None, datab
     zurueck. Wirft MissingDependencyError, wenn eine referenzierte
     Datenbank im Projekt fehlt (dann wird nichts geschrieben).
     """
+    require_bw2data()
     from bw2io.importers.base_lci import LCIImporter
     from bw2data.parameters import ActivityParameter
 

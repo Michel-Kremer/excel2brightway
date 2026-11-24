@@ -141,6 +141,27 @@ def _write_log(path, report, started):
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _drop_follow_up_issues(report):
+    """
+    Ist bei einer Datenbank unklar, welche Fassung zaehlt (FEHLER 'version_unklar'),
+    sind alle weiteren Meldungen zu deren Dateien Folgefehler (doppelte codes,
+    mehrdeutige Fluesse, ...). Sie werden weggelassen, bis die Fassung geklaert ist.
+    """
+    blocked = {
+        report.models[Path(i.file)].database
+        for i in report.issues
+        if i.kind == "version_unklar" and i.severity == FEHLER and Path(i.file) in report.models
+    }
+    if not blocked:
+        return
+    files = {path for path, model in report.models.items() if model.database in blocked}
+    before = len(report.issues)
+    report.issues = [i for i in report.issues
+                     if i.kind == "version_unklar" or i.file is None or Path(i.file) not in files]
+    if len(report.issues) < before:
+        logger.info("%d Folgemeldung(en) wegen unklarer Fassung ausgeblendet", before - len(report.issues))
+
+
 def run_checks(paths, backend=None, options: CheckOptions = None) -> CheckReport:
     """
     Fuehrt die gewaehlten Tests aus. `backend` (BrightwayBackend/MemoryBackend)
@@ -226,6 +247,8 @@ def run_checks(paths, backend=None, options: CheckOptions = None) -> CheckReport
         except Exception as exc:
             report.errors.append(f"Verweis-Test fehlgeschlagen: {type(exc).__name__}: {exc}")
             logger.debug(traceback.format_exc())
+
+    _drop_follow_up_issues(report)
 
     # Pruefblatt --------------------------------------------------------------
     if options.write_review:

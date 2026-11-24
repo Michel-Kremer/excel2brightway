@@ -13,12 +13,38 @@ Schnittstelle (duck typing):
                                -> list[InboundReference]
 """
 
+import sys
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 
 from .model import Record
 from .text import normalize_db_name
 
+BW2DATA_MAJOR = 4
 BIOSPHERE_NAME_HINT = "biosphere"
+
+
+class WrongBw2dataVersion(RuntimeError):
+    """bw2data fehlt oder hat die falsche Major-Version (Schutz der Projekte)."""
+
+
+def require_bw2data():
+    """
+    VOR jedem `import bw2data` aufrufen. Schon der Import oeffnet den geteilten
+    Brightway-Ordner; eine andere Major-Version legt dort Projektordner an oder
+    migriert Projekte irreversibel. Daher wird nur die Version aus den
+    Paket-Metadaten gelesen, ohne bw2data zu importieren.
+    """
+    try:
+        found = version("bw2data")
+    except PackageNotFoundError as exc:
+        raise WrongBw2dataVersion(f"bw2data ist in dieser Umgebung ({sys.prefix}) nicht installiert.") from exc
+    if found.split(".")[0] != str(BW2DATA_MAJOR):
+        raise WrongBw2dataVersion(
+            f"In dieser Umgebung ({sys.prefix}) ist bw2data {found} installiert, excel2brightway braucht "
+            f"bw2data {BW2DATA_MAJOR}.x. Brightway wird nicht angefasst. Bitte aus der Projektumgebung "
+            f"starten: im Projektordner 'uv run ex2bw-gui'."
+        )
 BIOSPHERE_NODE_TYPES = {"emission", "natural resource", "economic", "social", "inventory indicator"}
 
 
@@ -63,6 +89,7 @@ class BrightwayBackend:
     """
 
     def __init__(self, project):
+        require_bw2data()
         import bw2data as bd
 
         existing = {p.name for p in bd.projects}
@@ -137,9 +164,14 @@ class BrightwayBackend:
 
 
 def list_projects():
-    """Namen aller Brightway-Projekte (leer, wenn bw2data fehlt)."""
+    """Namen aller Brightway-Projekte (leer, wenn bw2data fehlt; Fehler bei falscher Version)."""
     try:
-        import bw2data as bd
-    except ImportError:
-        return []
+        require_bw2data()
+    except WrongBw2dataVersion:
+        try:
+            version("bw2data")
+        except PackageNotFoundError:
+            return []
+        raise
+    import bw2data as bd
     return sorted(p.name for p in bd.projects)

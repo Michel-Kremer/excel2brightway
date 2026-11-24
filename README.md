@@ -30,7 +30,10 @@ uv pip install --python <pfad-zur-ziel-umgebung>/python.exe -e .
 `bw2data` MUSS in derselben Major-Version installiert sein, die auch das
 Ziel-Brightway-Projekt zuletzt geschrieben hat (aktuell 4.x) - eine andere
 Major-Version loest beim ersten Projektzugriff eine automatische, irreversible
-Migration des geteilten Brightway-Projektordners aus.
+Migration des geteilten Brightway-Projektordners aus. excel2brightway prueft
+das deshalb, bevor es bw2data laedt, und verweigert mit einer anderen
+Major-Version jeden Zugriff auf Brightway (`core/backend.py`,
+`require_bw2data`).
 
 ## Bedienung: das Fenster
 
@@ -73,8 +76,9 @@ Was Pflicht und was optional ist, steht in `core/format_check.py`
 Die Spalte `database` der exchange-Zeile hat Vorrang:
 
 * nennt sie eine Datenbank, die in den Dateien des Ordners definiert ist ->
-  erst diese Dateien, dann eine gleichnamige Datenbank im Projekt (die Datei
-  geht vor);
+  nur diese Dateien. Eine gleichnamige Datenbank im Projekt wird beim
+  Schreiben ersetzt; was nur noch dort steht, wird geloescht und ist kein
+  Treffer (auch nicht, wenn sich der `code` einer Aktivitaet geaendert hat);
 * nennt sie eine andere Datenbank (z. B. `SOEC_Process` oder `ecoinvent 3.10`,
   normalisiert verglichen) -> nur dort;
 * ist sie leer -> erst alle Dateien des Ordners, dann die
@@ -139,7 +143,8 @@ steht zusammen mit allen Meldungen in **`ex2bw.log`** im Ordner.
   * Ordner oder Mehrfachauswahl: die neueste Version. Ist das nicht
     eindeutig (Variante ohne Versionsnummer, gleiche Nummer), blockiert ein
     FEHLER das Schreiben - dann nur eine Fassung auswaehlen oder die anderen
-    verschieben.
+    verschieben. Weitere Meldungen zu diesen Dateien (z. B. doppelte
+    `code`s) werden bis dahin ausgeblendet.
 * Die Datenbank in Brightway wird durch diesen Stand ersetzt. Aktivitaeten,
   die in Brightway stehen, aber in keiner Datei mehr, werden nur nach
   Bestaetigung geloescht; zeigen andere Datenbanken darauf, ist eine weitere
@@ -185,6 +190,8 @@ src/excel2brightway/
     apply.py          Auswahl uebernehmen
     write.py          Schreiben planen und ausfuehren
     migrate.py        Datenbank/Version umstellen
+    versions.py       Fassungen derselben Datei (_v0.1, _v0.3, _final, ...)
+    importer.py       ecoinvent (ecoSpold02, .7z/.zip/Ordner) in ein Projekt einlesen
     settings.py       zuletzt verwendete Einstellungen des Fensters
   brightway_writer.py Schreiben ueber bw2io/bw2data
   gui.py              Fenster (tkinter)
@@ -192,6 +199,25 @@ src/excel2brightway/
 ```
 
 Tests: `uv run pytest` (laufen ohne Brightway, mit `MemoryBackend`).
+
+## Noch zu testen (TODO)
+
+Am 2026-11-24 mit echtem Brightway (bw2data 4.7) geprueft: Fassungen,
+Schreiben, Verweis-Test, Pruefblatt-Ablauf ueber die Konsole, ecoinvent-Import
+aus entpacktem Ordner. Offen:
+
+* [ ] **Parameter und Formeln** nach Brightway schreiben - braucht eine
+  LCI-Datei mit Parametern. Dabei klaeren, ob `ActivityBlock.parameter_group`
+  als `group` geschrieben werden soll.
+* [ ] **Fenster (GUI) von Hand**: Excel oeffnet sich nach dem Pruefen,
+  Auswahlliste im Pruefblatt, Meldung "Bitte Datei in Excel schliessen",
+  Import-Dialog (Archiv/Ordner waehlen, Namensvorschlag, Fenster bleibt
+  waehrend des Imports bedienbar).
+* [ ] **Activity Browser**: geschriebene Datenbanken in den Testprojekten
+  `ecoinvent-3.11-cutoff_ex2bw_test` und `ex2bw_import_test` ansehen.
+* [ ] **Import aus `.7z`** direkt (bisher nur Mini-Archiv und entpackter Ordner).
+* [ ] **Import mit unpassender Biosphere** (ungelinkte Exchanges -> nichts
+  geschrieben, eben angelegte Biosphere wieder entfernt).
 
 ## Geplant
 

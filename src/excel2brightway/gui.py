@@ -21,7 +21,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .core.apply import DataChangedError, apply_review, summarize
-from .core.backend import list_projects
+from .core.backend import WrongBw2dataVersion, list_projects
 from .core.checks import CheckOptions, expand_selection, run_checks
 from .core.importer import ImportProblem
 from .core.model import FEHLER, HINWEIS, TEST_FLUSS, TEST_FORMAT, TEST_VERWEIS, WARNUNG
@@ -268,7 +268,7 @@ class App(tk.Tk):
                 elif kind == "error":
                     exc, trace = payload
                     self._log(trace)
-                    if isinstance(exc, (WorkbookLockedError, DataChangedError, ImportProblem)):
+                    if isinstance(exc, (WorkbookLockedError, DataChangedError, ImportProblem, WrongBw2dataVersion)):
                         messagebox.showwarning("excel2brightway", str(exc))
                     else:
                         messagebox.showerror("excel2brightway", f"{callback} fehlgeschlagen:\n{exc}")

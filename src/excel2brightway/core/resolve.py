@@ -7,8 +7,9 @@ mit Kandidaten fuer das Pruefblatt.
 
 Wo gesucht wird (Spalte 'database' der exchange-Zeile hat Vorrang):
   * 'database' nennt eine Datenbank, die in den eingelesenen Dateien definiert
-    ist -> zuerst diese Dateien, dann eine gleichnamige Datenbank im Projekt
-    (Aktivitaeten, die nur noch in Brightway stehen). Die Datei geht vor.
+    ist -> nur diese Dateien. Eine gleichnamige Datenbank im Projekt wird
+    beim Schreiben durch die Dateien ersetzt; Aktivitaeten, die nur noch dort
+    stehen, werden geloescht und sind daher keine Treffer.
   * 'database' nennt eine andere Datenbank -> nur dort. Das Label wird
     normalisiert verglichen ('ecoinvent 3.12' ~ 'ecoinvent-3.12-cutoff').
   * 'database' leer -> technosphere: erst alle Dateien, dann die
@@ -143,10 +144,15 @@ class Resolver:
     # ------------------------------------------------------------------ Indizes
     def _index(self, database) -> _DbIndex:
         if database not in self._indexes:
-            records = list(self._file_records.get(database, []))
-            if self.backend is not None and database in self.project_databases:
-                file_codes = {r.code for r in records}
-                records.extend(r for r in self.backend.records(database) if r.code not in file_codes)
+            if database in self._file_records:
+                # Die Dateien ersetzen die Datenbank beim Schreiben vollstaendig; was nur noch in
+                # Brightway steht, wird geloescht und darf kein Treffer sein (sonst "mehrdeutig"
+                # nach code-Aenderung bzw. Verweis ins Leere nach dem Schreiben).
+                records = list(self._file_records[database])
+            elif self.backend is not None and database in self.project_databases:
+                records = list(self.backend.records(database))
+            else:
+                records = []
             self._indexes[database] = _DbIndex(records)
         return self._indexes[database]
 

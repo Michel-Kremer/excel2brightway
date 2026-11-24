@@ -19,6 +19,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .backend import require_bw2data
+
 ARCHIVE_SUFFIXES = (".7z", ".zip")
 _VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
 _SYSTEM_MODELS = ("cutoff", "cut-off", "apos", "consequential", "consequential_longterm", "eol")
@@ -115,6 +117,7 @@ def import_ecospold(source, project, database, biosphere, version=None, log=prin
     datasets, masterdata = find_ecospold_dirs(folder)
     log(f"Datensaetze: {datasets}")
 
+    require_bw2data()
     import bw2data as bd
     import bw2io as bi
     from bw2io.importers.ecospold2_biosphere import Ecospold2BiosphereImporter

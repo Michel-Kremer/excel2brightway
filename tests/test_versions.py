@@ -79,6 +79,16 @@ def test_variante_ohne_version_bei_ordnerauswahl_blockiert(tmp_path):
     assert plans == []
 
 
+def test_unklare_fassung_blendet_folgefehler_aus(tmp_path):
+    # beide Fassungen mit gleichem code -> ohne Filter zusaetzlich 'code_doppelt' je Datei
+    _file(tmp_path, "LCI_X_v0.3.xlsx", "a")
+    _file(tmp_path, "LCI_X_final.xlsx", "a")
+    _file(tmp_path, "anderes.xlsx", "a", database="ANDERE")
+    report = run_checks([tmp_path], backend=make_backend())
+    assert [i.kind for i in report.issues] == ["version_unklar"]
+    assert not report.ok
+
+
 def test_mehrfachauswahl_zweier_fassungen_nimmt_die_neueste(tmp_path):
     a = _file(tmp_path, "LCI_X_v1.xlsx", "a")
     b = _file(tmp_path, "LCI_X_v2.xlsx", "a")

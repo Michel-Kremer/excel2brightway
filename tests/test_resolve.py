@@ -141,6 +141,27 @@ def test_file_wins_over_same_database_in_project(tmp_path):
     assert res.ok and res.record.origin == "datei"
 
 
+def test_changed_code_is_not_ambiguous_with_old_activity_in_project(tmp_path):
+    # in Brightway noch mit altem code, in der Datei mit neuem -> nur die Datei zaehlt
+    old = {"SOEC": [Record("SOEC", "stack", "stack production, SOEC", None, "DE", "unit")]}
+    stack = activity_rows("stack production, SOEC", "stack_neu", [], unit="unit", location="DE")
+    rows = activity_rows("SOEC operation", "op", [["stack production, SOEC", 0.001, "unit", "SOEC", None, "technosphere"]],
+                         unit="kWh", database_row="SOEC") + stack
+    model = read_workbook(write_workbook(tmp_path / "soec.xlsx", {"Data": rows}))
+    res = Resolver([model], backend=make_backend(extra=old)).resolve(model.activities[0].exchanges[1])
+    assert res.ok and res.record.key == ("SOEC", "stack_neu")
+
+
+def test_activity_only_left_in_project_is_no_match_for_file_database(tmp_path):
+    # steht nur noch in Brightway und wird beim Schreiben geloescht -> kein Treffer
+    old = {"SOEC": [Record("SOEC", "bop", "balance of plant, SOEC", None, "DE", "unit")]}
+    rows = activity_rows("SOEC operation", "op", [["balance of plant, SOEC", 1, "unit", "SOEC", "DE", "technosphere"]],
+                         unit="kWh", database_row="SOEC")
+    model = read_workbook(write_workbook(tmp_path / "soec.xlsx", {"Data": rows}))
+    res = Resolver([model], backend=make_backend(extra=old)).resolve(model.activities[0].exchanges[1])
+    assert not res.ok and res.status == "nicht_gefunden"
+
+
 def test_explicit_database_is_the_only_place_searched(tmp_path):
     own = {"SOEC_Process": [Record("SOEC_Process", "x", "something else", None, "DE", "kg")]}
     (res,), _ = _resolve(tmp_path, [["nickel, class 1", 1, "kg", "SOEC_Process", None, "technosphere"]],

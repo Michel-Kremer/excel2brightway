@@ -24,6 +24,8 @@ Meldungen (Verweis-Test, an der gezaehlten bzw. ersten ausgewaehlten Datei):
                                   Ordner-/Mehrfachauswahl; bei Einzelauswahl
                                   WARNUNG) - alle Dateien bleiben drin
 Ignorierte Dateien fliessen in keine Pruefung und nicht ins Schreiben ein.
+Beim FEHLER 'version_unklar' blendet checks.py alle weiteren Meldungen zu den
+Dateien dieser Datenbank aus (Folgefehler wie doppelte codes).
 """
 
 import re
@@ -122,7 +124,8 @@ def resolve_versions(models, selected, single_selection):
                 severity=FEHLER if blocking else WARNUNG, kind="version_unklar",
                 message=f"Mehrere Fassungen der Datenbank '{database}' ({names}) und es ist nicht eindeutig, "
                         f"welche zaehlt (fehlende oder gleiche Versionsnummer). "
-                        + ("Bitte nur eine davon auswaehlen oder die anderen aus dem Ordner verschieben."
+                        + ("Bitte nur eine davon auswaehlen oder die anderen aus dem Ordner verschieben. "
+                           "Weitere Meldungen zu diesen Dateien kommen erst danach."
                            if blocking else "Alle werden zusammen geprueft und geschrieben."),
                 **base,
             ))

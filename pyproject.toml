@@ -13,6 +13,7 @@ dependencies = [
     "bw2io>=0.9",
     "PyYAML>=6.0",
     "openpyxl>=3.1",
+    "py7zr>=0.22",
 ]
 
 [project.optional-dependencies]
