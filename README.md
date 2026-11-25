@@ -46,7 +46,10 @@ Konsolenfenster an (`[project.gui-scripts]`), die sich auch als Verknuepfung
 auf den Desktop legen laesst.
 
 1. **Datei(en) oder Ordner** waehlen. Bei einem Ordner werden alle `*.xlsx`
-   darin geprueft.
+   darin geprueft, die ein LCI-Blatt haben (`cutoff` in Zelle A1 eines
+   Blatts). Andere Excel-Dateien (Recherche, Rechentools, ...) werden nicht
+   eingelesen und in der Zusammenfassung genannt. Einzeln ausgewaehlte
+   Dateien werden immer gelesen.
 2. **Projekt** waehlen und optional die **Verknuepfungs-Datenbanken**
    markieren (keine Auswahl = alle Datenbanken des Projekts). Dort wird
    gesucht, wenn eine exchange-Zeile keine `database` angibt.
@@ -145,6 +148,10 @@ steht zusammen mit allen Meldungen in **`ex2bw.log`** im Ordner.
     FEHLER das Schreiben - dann nur eine Fassung auswaehlen oder die anderen
     verschieben. Weitere Meldungen zu diesen Dateien (z. B. doppelte
     `code`s) werden bis dahin ausgeblendet.
+* Mehrere Datenbanken werden in Abhaengigkeits-Reihenfolge geschrieben:
+  verweist `PHOENIX_BIOGAS` auf `PHOENIX_SCHREIBER`, wird `PHOENIX_SCHREIBER`
+  zuerst geschrieben. Verweisen Datenbanken im Kreis aufeinander, wird
+  nichts geschrieben (noch nicht unterstuetzt).
 * Die Datenbank in Brightway wird durch diesen Stand ersetzt. Aktivitaeten,
   die in Brightway stehen, aber in keiner Datei mehr, werden nur nach
   Bestaetigung geloescht; zeigen andere Datenbanken darauf, ist eine weitere

@@ -24,7 +24,7 @@ def test_split_version(stem, expected):
 def _file(folder, name, code, database="DB"):
     rows = activity_rows(f"act {code}", code, [["electricity, medium voltage", 1, "kWh", EI, "DE", "technosphere"]],
                          unit="kWh", database_row=database)
-    return write_workbook(folder / name, {"Data": rows})
+    return write_workbook(folder / name, {"Data": rows}, cutoff=True)
 
 
 def _kinds(report):

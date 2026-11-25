@@ -59,6 +59,7 @@ class CheckReport:
     errors: list = field(default_factory=list)  # sonstige Fehler (Text)
     log_path: Path = None
     ignored: dict = field(default_factory=dict)  # Pfad -> gezaehlte Fassung (versions.py)
+    skipped: list = field(default_factory=list)  # Excel-Dateien im Ordner ohne LCI-Blatt ('cutoff' in A1)
 
     def counts(self) -> dict:
         result = {FEHLER: 0, WARNUNG: 0, HINWEIS: 0}
@@ -90,18 +91,25 @@ class CheckReport:
             f"{len(self.selected)} Datei(en): {counts[FEHLER]} Fehler, {counts[WARNUNG]} Warnung(en), "
             f"{counts[HINWEIS]} Hinweis(e) -> {status}",
         ]
+        if self.skipped:
+            lines.append(f"{len(self.skipped)} Excel-Datei(en) ohne LCI-Blatt ('cutoff' in A1) nicht eingelesen: "
+                         + ", ".join(p.name for p in self.skipped))
         if self.errors:
             lines.append(f"{len(self.errors)} sonstige(r) Fehler, siehe {self.log_path or LOG_FILENAME}")
         return "\n".join(lines)
 
 
-def expand_selection(paths) -> list:
-    """Dateien und Ordner -> Liste von Excel-Dateien (Ordner: oberste Ebene, ohne ~$-Dateien)."""
+def expand_selection(paths, skipped=None) -> list:
+    """
+    Dateien und Ordner -> Liste von Excel-Dateien. Ordner: oberste Ebene, nur
+    LCI-Dateien ('cutoff' in A1 eines Blatts), ohne ~$-Dateien; uebergangene
+    Dateien landen in `skipped`. Einzeln gewaehlte Dateien werden immer gelesen.
+    """
     files = []
     for path in paths:
         path = Path(path)
         if path.is_dir():
-            files.extend(list_excel_files(path))
+            files.extend(list_excel_files(path, skipped))
         else:
             files.append(path)
     unique = []
@@ -112,11 +120,11 @@ def expand_selection(paths) -> list:
     return unique
 
 
-def context_files(selected) -> list:
-    """Alle Excel-Dateien der Ordner der ausgewaehlten Dateien (inkl. der Auswahl)."""
+def context_files(selected, skipped=None) -> list:
+    """Alle LCI-Dateien der Ordner der ausgewaehlten Dateien (inkl. der Auswahl)."""
     files = list(selected)
     for folder in sorted({p.parent for p in selected}):
-        for f in list_excel_files(folder):
+        for f in list_excel_files(folder, skipped):
             f = f.resolve()
             if f not in files:
                 files.append(f)
@@ -170,10 +178,13 @@ def run_checks(paths, backend=None, options: CheckOptions = None) -> CheckReport
     """
     options = options or CheckOptions()
     started = datetime.now()
-    selected = expand_selection(paths)
-    report = CheckReport(selected=selected, models={}, issues=[], resolutions={}, options=options)
+    skipped = []
+    selected = expand_selection(paths, skipped)
+    report = CheckReport(selected=selected, models={}, issues=[], resolutions={}, options=options, skipped=skipped)
 
-    for path in context_files(selected):
+    context = context_files(selected, skipped)
+    skipped[:] = [p for p in skipped if p not in selected]  # einzeln gewaehlte Dateien werden immer gelesen
+    for path in context:
         report.models[path] = read_workbook(path)
 
     # Mehrere Fassungen derselben Datei: nur eine zaehlt (versions.py)

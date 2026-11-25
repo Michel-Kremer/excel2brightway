@@ -428,10 +428,43 @@ def data_hash(path_or_workbook) -> str:
     return digest.hexdigest()
 
 
-def list_excel_files(folder) -> list:
-    """Alle Eingabe-Dateien (*.xlsx) eines Ordners, ohne Excel-Sperrdateien (~$...)."""
+LCI_MARKER = "cutoff"
+
+
+def is_lci_file(path) -> bool:
+    """
+    True, wenn mindestens ein Blatt in A1 'cutoff' hat - so beginnen die
+    LCI-Blaetter mit den Aktivitaeten. Andere Excel-Dateien im Ordner
+    (Recherche, Rechentools, ...) werden damit nicht eingelesen.
+    Nicht lesbare Dateien gelten als LCI-Datei, damit der Lesefehler gemeldet
+    und die Datei nicht still uebergangen wird.
+    """
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+    except Exception:
+        return True
+    try:
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(min_row=1, max_row=1, max_col=1, values_only=True):
+                value = row[0] if row else None
+                if isinstance(value, str) and value.strip().lower() == LCI_MARKER:
+                    return True
+        return False
+    finally:
+        wb.close()
+
+
+def list_excel_files(folder, skipped=None) -> list:
+    """
+    LCI-Dateien (*.xlsx mit 'cutoff' in A1 eines Blatts, siehe is_lci_file)
+    eines Ordners, ohne Excel-Sperrdateien (~$...). Uebergangene Dateien
+    werden an `skipped` (Liste) angehaengt, falls angegeben.
+    """
     folder = Path(folder)
-    return sorted(
-        p for p in folder.glob("*.xlsx")
-        if not p.name.startswith("~$") and p.is_file()
-    )
+    result = []
+    for path in sorted(p for p in folder.glob("*.xlsx") if not p.name.startswith("~$") and p.is_file()):
+        if is_lci_file(path):
+            result.append(path)
+        elif skipped is not None and path.resolve() not in skipped:
+            skipped.append(path.resolve())
+    return result

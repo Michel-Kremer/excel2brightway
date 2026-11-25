@@ -18,8 +18,8 @@ def _soec_files(tmp_path):
     )
     stack = activity_rows("stack production, SOEC", "stack", [["nickel, class 1", 0.5, "kg", EI, None, "technosphere"]],
                           unit="unit", database_row="SOEC")
-    a = write_workbook(tmp_path / "betrieb.xlsx", {"Data": op})
-    b = write_workbook(tmp_path / "stack.xlsx", {"Data": stack})
+    a = write_workbook(tmp_path / "betrieb.xlsx", {"Data": op}, cutoff=True)
+    b = write_workbook(tmp_path / "stack.xlsx", {"Data": stack}, cutoff=True)
     return a, b
 
 
@@ -78,7 +78,7 @@ def test_nothing_is_planned_while_flows_are_open(tmp_path):
     report, plans = plan_write([a], make_backend(), CheckOptions())
     assert plans  # Kontrolle: so ist alles gruen
     rows = activity_rows("X", "x", [["gibt es nicht", 1, "kg", EI, None, "technosphere"]], database_row="X")
-    bad = write_workbook(tmp_path / "x.xlsx", {"Data": rows})
+    bad = write_workbook(tmp_path / "x.xlsx", {"Data": rows}, cutoff=True)
     report, plans = plan_write([bad], make_backend())
     assert plans == [] and not report.ok
 
@@ -136,6 +136,41 @@ def test_execute_write_uses_writer(tmp_path, monkeypatch):
     assert calls == [("proj", "SOEC", 2)]
 
 
+def test_abhaengige_datenbank_wird_nach_ihrer_grundlage_geschrieben(tmp_path, monkeypatch):
+    # wie PHOENIX_BIOGAS (alphabetisch vorn) -> PHOENIX_SCHREIBER: SCHREIBER muss zuerst geschrieben werden
+    base = activity_rows("stack production", "stack", [], unit="unit", database_row="B_SCHREIBER")
+    user = activity_rows("biogas plant", "plant", [["stack production", 1, "unit", "B_SCHREIBER", "DE", "technosphere"]],
+                         unit="unit", database_row="A_BIOGAS")
+    write_workbook(tmp_path / "01_schreiber.xlsx", {"Data": base}, cutoff=True)
+    write_workbook(tmp_path / "03_biogas.xlsx", {"Data": user}, cutoff=True)
+    calls = []
+
+    def fake_write_database(project, database, activities, project_parameters=None, database_parameters=None):
+        calls.append(database)
+        return len(activities)
+
+    from excel2brightway import brightway_writer
+    monkeypatch.setattr(brightway_writer, "write_database", fake_write_database)
+    report, plans = plan_write([tmp_path], make_backend())
+    assert report.ok, report.issues
+    assert [p.database for p in plans] == ["B_SCHREIBER", "A_BIOGAS"]
+    execute_write(plans, "proj")
+    assert calls == ["B_SCHREIBER", "A_BIOGAS"]
+
+
+def test_kreisverweis_wird_vor_dem_schreiben_abgefangen():
+    def plan(name, target):
+        return write_module.WritePlan(
+            database=name, files=[], auto_added=[], project_parameters=[], database_parameters=[],
+            activities=[{"code": "x", "exchanges": [{"type": "technosphere", "input": (target, "x")}]}],
+        )
+
+    with pytest.raises(WriteBlockedError, match="im Kreis"):
+        write_module.write_order([plan("A", "B"), plan("B", "A"), plan("C", "A")])
+    order = write_module.write_order([plan("A", "ecoinvent"), plan("B", "A"), plan("C", "B")])
+    assert [p.database for p in order] == ["A", "B", "C"]
+
+
 def test_bypassed_format_errors_skip_rows_when_writing(tmp_path):
     rows = activity_rows(
         "A", "a",
@@ -143,7 +178,7 @@ def test_bypassed_format_errors_skip_rows_when_writing(tmp_path):
          ["nickel, class 1", None, "kg", EI, None, "technosphere"]],
         database_row="DBX",
     )
-    path = write_workbook(tmp_path / "a.xlsx", {"Data": rows + [BLANK]})
+    path = write_workbook(tmp_path / "a.xlsx", {"Data": rows + [BLANK]}, cutoff=True)
     _, plans = plan_write([path], make_backend())
     assert plans == []
     _, plans = plan_write([path], make_backend(), CheckOptions(bypass_format=True))

@@ -19,15 +19,20 @@ def fixtures_dir() -> Path:
     return FIXTURES_DIR
 
 
-def write_workbook(path: Path, sheets: dict) -> Path:
+def write_workbook(path: Path, sheets: dict, cutoff=False) -> Path:
     """
     Schreibt eine .xlsx mit den gegebenen Blaettern.
     `sheets`: {sheet_name: [[zelle, zelle, ...], ...]} - eine Liste von Zeilen.
+    `cutoff`: Blaetter, die nicht schon mit 'skip'/'cutoff' beginnen, bekommen wie
+    echte LCI-Dateien eine Zeile ['cutoff', <Spaltenzahl>] vorangestellt.
     """
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     for sheet_name, rows in sheets.items():
         ws = wb.create_sheet(sheet_name)
+        first = rows[0][0] if rows and rows[0] else None
+        if cutoff and not (isinstance(first, str) and first.strip().lower() in ("skip", "cutoff")):
+            ws.append(["cutoff", max((len(r) for r in rows), default=1)])
         for row in rows:
             ws.append(row)
     wb.save(path)

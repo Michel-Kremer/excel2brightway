@@ -202,6 +202,10 @@ def plan_write(paths, backend, options: CheckOptions = None, allow_broken_refere
             skipped=skipped,
             exists_in_project=impact.exists_in_project,
         ))
+    try:
+        plans = write_order(plans)  # Anzeige in Schreib-Reihenfolge
+    except WriteBlockedError:
+        pass  # Kreisverweis: execute_write meldet ihn, bevor etwas geschrieben wird
     return report, plans
 
 
@@ -220,9 +224,46 @@ def assert_allowed(plans, allow_delete=False, allow_broken_references=False):
             )
 
 
+def write_order(plans):
+    """
+    Reihenfolge zum Schreiben: Datenbanken, auf die andere geplante Datenbanken
+    verweisen, zuerst (sonst fehlt die Abhaengigkeit noch im Projekt). Bei
+    gleichem Rang alphabetisch. Verweisen Datenbanken im Kreis aufeinander,
+    wird nichts geschrieben (WriteBlockedError).
+    """
+    by_name = {plan.database: plan for plan in plans}
+    needs = {
+        plan.database: {
+            exchange["input"][0]
+            for activity in plan.activities
+            for exchange in activity.get("exchanges", [])
+            if exchange.get("input") and exchange["input"][0] in by_name and exchange["input"][0] != plan.database
+        }
+        for plan in plans
+    }
+    ordered, done = [], set()
+    while len(ordered) < len(plans):
+        ready = sorted(name for name in by_name if name not in done and needs[name] <= done)
+        if not ready:
+            cycle = sorted(name for name in by_name if name not in done)
+            details = "; ".join(f"{name} -> {', '.join(sorted(needs[name] - done))}" for name in cycle)
+            raise WriteBlockedError(
+                f"Die Datenbanken {', '.join(cycle)} verweisen im Kreis aufeinander ({details}). "
+                "Das kann noch nicht in einem Schritt geschrieben werden - nichts wurde geschrieben."
+            )
+        for name in ready:
+            ordered.append(by_name[name])
+            done.add(name)
+    return ordered
+
+
 def execute_write(plans, project, allow_delete=False, allow_broken_references=False):
-    """Schreibt die geplanten Datenbanken. Gibt [(database, anzahl_aktivitaeten), ...] zurueck."""
+    """
+    Schreibt die geplanten Datenbanken in Abhaengigkeits-Reihenfolge (write_order).
+    Gibt [(database, anzahl_aktivitaeten), ...] zurueck.
+    """
     assert_allowed(plans, allow_delete=allow_delete, allow_broken_references=allow_broken_references)
+    plans = write_order(plans)
     from .. import brightway_writer
 
     written = []
